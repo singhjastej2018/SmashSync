@@ -501,7 +501,7 @@ namespace Ryujinx.HLE
             AddText(hash, Configuration.EnableDockedMode ? "docked" : "handheld");
             AddText(hash, Configuration.MemoryConfiguration.ToString());
             AddText(hash, Configuration.MemoryManagerMode.ToString());
-            AddText(hash, Configuration.TickScalar.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
+            AddText(hash, TickScalar.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
             AddText(hash, Configuration.UseHypervisor ? "hypervisor" : "jit");
             AddText(hash, Configuration.EnableInternetAccess ? "internet" : "offline");
             AddText(hash, Configuration.SystemTimeOffset.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
