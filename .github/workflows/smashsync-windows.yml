@@ -5,6 +5,10 @@ on:
     branches: [ master ]
   workflow_dispatch:
 
+concurrency:
+  group: smashsync-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   DOTNET_CLI_TELEMETRY_OPTOUT: 1
 
