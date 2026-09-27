@@ -73,8 +73,11 @@ namespace Ryujinx.Ava.UI.Views.Main
             bool connected = SmashSyncLobbyService.IsConnected;
             bool incoming = SmashSyncLobbyService.HasIncomingRequest;
             bool requesting = SmashSyncLobbyService.State == SmashSyncLobbyState.RequestSent;
+            bool localIsAuthority = SmashSyncLobbyService.LocalPlayer == 1;
 
-            SmashSyncRequestButton.IsVisible = !connected && !incoming;
+            // P1 is the single session/save authority. Hiding Request on P2 avoids
+            // an invalid cross-connect path and mirrors the protocol invariant.
+            SmashSyncRequestButton.IsVisible = localIsAuthority && !connected && !incoming;
             SmashSyncRequestButton.IsEnabled = !requesting;
             SmashSyncAcceptButton.IsVisible = incoming;
             SmashSyncRejectButton.IsVisible = incoming;
