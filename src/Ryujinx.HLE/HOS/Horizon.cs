@@ -121,6 +121,14 @@ namespace Ryujinx.HLE.HOS
         {
             TickSource = new TickSource(KernelConstants.CounterFrequency);
 
+            // SmashSync freezes the guest counter at the earliest possible point.
+            // This happens before kernel/services initialization so differences in
+            // host construction speed do not become different guest-time offsets.
+            if (device.Configuration.SuspendApplicationOnStart)
+            {
+                TickSource.Suspend();
+            }
+
             KernelContext = new KernelContext(
                 TickSource,
                 device,
