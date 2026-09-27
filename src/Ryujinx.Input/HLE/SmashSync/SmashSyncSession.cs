@@ -89,7 +89,9 @@ namespace Ryujinx.Input.HLE.SmashSync
         private ulong _digest = 14695981039346656037UL;
         private long _lastPingStamp;
         private double _lastRttMs;
-        private long _lastControlSendMs;
+        private long _lastHelloSendMs;
+        private long _lastReadySendMs;
+        private long _lastStartSendMs;
         private long _lastRetransmitMs;
         private readonly long _tickInterval;
         private long _nextTickStamp;
@@ -182,18 +184,18 @@ namespace Ryujinx.Input.HLE.SmashSync
 
             long now = Environment.TickCount64;
 
-            if (!_peerHello && now - _lastControlSendMs >= 250)
+            if (!_peerHello && now - _lastHelloSendMs >= 250)
             {
                 SendControl(PacketType.Hello, 0, 0);
-                _lastControlSendMs = now;
+                _lastHelloSendMs = now;
             }
 
             if (_state == RunState.ReadyBarrier)
             {
-                if (now - _lastControlSendMs >= 100)
+                if (now - _lastReadySendMs >= 100)
                 {
                     SendControl(PacketType.Ready, _sessionId, 0);
-                    _lastControlSendMs = now;
+                    _lastReadySendMs = now;
                 }
 
                 if (_peerReady)
@@ -204,12 +206,14 @@ namespace Ryujinx.Input.HLE.SmashSync
                         {
                             _sessionId = DateTime.UtcNow.Ticks ^ Stopwatch.GetTimestamp() ^ Environment.ProcessId;
                             if (_sessionId == 0) _sessionId = 1;
+                            Log($"peer READY; leader created session={_sessionId}");
                         }
 
-                        if (!_startAckReceived && now - _lastControlSendMs >= 100)
+                        if (!_startAckReceived && now - _lastStartSendMs >= 100)
                         {
                             SendControl(PacketType.Start, _sessionId, 0);
-                            _lastControlSendMs = now;
+                            _lastStartSendMs = now;
+                            Log($"sent START session={_sessionId}");
                         }
 
                         if (_startAckReceived)
@@ -220,6 +224,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     else if (_startReceived)
                     {
                         SendControl(PacketType.StartAck, _sessionId, 0);
+                        Log($"sent START_ACK session={_sessionId}");
                         RequestResumeFromBarrier();
                     }
                 }
@@ -270,6 +275,8 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _startReceived = false;
                 _startAckReceived = false;
                 _sessionId = 0;
+                _lastReadySendMs = 0;
+                _lastStartSendMs = 0;
                 _tick = 0;
                 _nextTickStamp = Stopwatch.GetTimestamp();
                 _lastP1 = Neutral(PlayerIndex.Player1);
@@ -547,15 +554,18 @@ namespace Ryujinx.Input.HLE.SmashSync
                     switch (type)
                     {
                         case PacketType.Hello:
+                            if (!_peerHello) Log($"received HELLO from P{player + 1}");
                             _peerHello = true;
                             break;
                         case PacketType.Ready:
+                            if (!_peerReady) Log($"received READY from P{player + 1}");
                             _peerReady = true;
                             break;
                         case PacketType.Start:
                             if (LocalPlayerIndex == 1 && session != 0)
                             {
                                 _sessionId = session;
+                                if (!_startReceived) Log($"received START session={session}");
                                 _startReceived = true;
                                 SendControl(PacketType.StartAck, session, 0);
                             }
@@ -563,6 +573,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                         case PacketType.StartAck:
                             if (LocalPlayerIndex == 0 && session == _sessionId)
                             {
+                                if (!_startAckReceived) Log($"received START_ACK session={session}");
                                 _startAckReceived = true;
                             }
                             break;
