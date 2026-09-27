@@ -22,15 +22,27 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: |
+            8.0.x
+            10.0.x
 
       - name: Build required Ryujinx.LibHac package
         shell: pwsh
         run: |
           git clone --depth 1 https://github.com/sinjunyoung/NSW.M2.git vendor/NSW.M2
           New-Item -ItemType Directory -Force vendor-packages | Out-Null
-          dotnet pack vendor/NSW.M2/LibHac/LibHac.csproj -c Release -o vendor-packages -p:PackageVersion=0.21.0-alpha.133
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $sdk8 = dotnet --list-sdks |
+            ForEach-Object { if ($_ -match '^(8\.0\.\d+)') { $Matches[1] } } |
+            Select-Object -Last 1
+          if (-not $sdk8) { throw "A .NET 8 SDK was not found." }
+          @{ sdk = @{ version = $sdk8; rollForward = "latestPatch" } } |
+            ConvertTo-Json -Depth 3 |
+            Set-Content vendor/NSW.M2/global.json
+          Push-Location vendor/NSW.M2
+          dotnet pack LibHac/LibHac.csproj -c Release -o ../../vendor-packages -p:PackageVersion=0.21.0-alpha.133
+          $packExit = $LASTEXITCODE
+          Pop-Location
+          if ($packExit -ne 0) { exit $packExit }
 
       - name: Restore Windows x64
         run: dotnet restore src/Ryujinx/Ryujinx.csproj -r win-x64
