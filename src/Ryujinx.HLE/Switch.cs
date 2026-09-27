@@ -241,7 +241,7 @@ namespace Ryujinx.HLE
 
                 foreach (ulong saveId in saveIds.OrderBy(id => id))
                 {
-                    AddText(hash, $"save:{saveId:x16}");
+                    AddText(hash, "save");
 
                     string saveRoot = Path.Combine(VirtualFileSystem.GetNandPath(), $"user/save/{saveId:x16}");
                     if (!Directory.Exists(saveRoot))
