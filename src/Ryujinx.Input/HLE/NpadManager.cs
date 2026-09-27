@@ -105,6 +105,7 @@ namespace Ryujinx.Input.HLE
 
         public void NotifySmashSyncPaused() => _smashSync?.NotifyPaused();
         public void WaitForSmashSyncResumeEpoch() => _smashSync?.WaitForResumeEpoch();
+        public void NotifySmashSyncResumeDispatch() => _smashSync?.NotifyResumeDispatch();
         public void NotifySmashSyncResumed() => _smashSync?.NotifyResumed();
 
         private void HandleOnGamepadDisconnected(string obj)
