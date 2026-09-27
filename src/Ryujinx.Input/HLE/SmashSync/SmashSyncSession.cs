@@ -20,9 +20,29 @@ namespace Ryujinx.Input.HLE.SmashSync
         private const int HeaderSize = 32;
         private const int RecordSize = 32;
         private const int MaxRedundancy = 3;
-        private const int ReleaseLeadMs = 120;
+        private const int ClockSyncMinSamples = 6;
+        private const int ClockSyncMaxWaitMs = 750;
+        private const int ClockSyncIntervalMs = 20;
+        private const int EpochLeadMs = 500;
+        private const int EpochPacketSize = HeaderSize + 8;
 
-        private enum PacketType : byte { Hello = 1, Ready = 2, Start = 3, StartAck = 4, Input = 5, Ping = 6, Pong = 7, Release = 8, ReleaseAck = 9, StateFingerprint = 10 }
+        private enum PacketType : byte
+        {
+            Hello = 1,
+            Ready = 2,
+            Start = 3,
+            StartAck = 4,
+            Input = 5,
+            Ping = 6,
+            Pong = 7,
+            Release = 8,
+            ReleaseAck = 9,
+            StateFingerprint = 10,
+            ClockSyncRequest = 11,
+            ClockSyncResponse = 12,
+            Epoch = 13,
+            EpochAck = 14,
+        }
         private enum RunState { WaitingForReady, PausingForReady, ReadyBarrier, WaitingForResume, Running, Failed }
 
         private sealed class ReplayInput
@@ -62,6 +82,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private readonly SmashSyncMode _mode;
         private readonly object _remoteLock = new();
         private readonly object _sendLock = new();
+        private readonly object _clockLock = new();
         private readonly Dictionary<ulong, GamepadInput> _localHistory = [];
         private readonly Dictionary<ulong, GamepadInput> _remoteHistory = [];
         private readonly Dictionary<ulong, ReplayFrame> _replay = [];
@@ -80,6 +101,8 @@ namespace Ryujinx.Input.HLE.SmashSync
         private volatile bool _releaseReceived;
         private volatile bool _releaseAckReceived;
         private volatile bool _stateFingerprintReceived;
+        private volatile bool _epochReceived;
+        private volatile bool _epochAckReceived;
 
         private RunState _state;
         private bool _pauseRequested;
@@ -101,11 +124,20 @@ namespace Ryujinx.Input.HLE.SmashSync
         private long _barrierEnteredMs;
         private long _resumeTargetStamp;
         private long _lastRetransmitMs;
+        private long _lastClockSyncSendMs;
+        private long _clockSyncStartedMs;
+        private long _lastEpochSendMs;
+        private long _clockBestRttNs = long.MaxValue;
+        private long _clockOffsetNs;
+        private int _clockSamples;
+        private long _sharedEpochP1Ns;
+        private long _localEpochNs;
         private long _lastStateFingerprintSendMs;
         private ulong _localStateFingerprint;
         private ulong _remoteStateFingerprint;
         private bool _stateFingerprintReady;
         private readonly long _tickInterval;
+        private readonly long _tickIntervalNs;
         private long _nextTickStamp;
         private GamepadInput _lastP1;
         private GamepadInput _lastP2;
@@ -135,6 +167,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             _config = config;
             _mode = config.ParsedMode;
             _tickInterval = Math.Max(1, Stopwatch.Frequency / _config.SyncHz);
+            _tickIntervalNs = Math.Max(1, 1_000_000_000L / _config.SyncHz);
             _nextTickStamp = Stopwatch.GetTimestamp();
             SmashSyncLobbyService.Initialize();
             bool preGameAccepted = _mode == SmashSyncMode.Netplay && SmashSyncLobbyService.IsConnected;
