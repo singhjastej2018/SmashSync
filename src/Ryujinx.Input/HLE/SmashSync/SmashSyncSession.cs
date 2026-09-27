@@ -344,6 +344,9 @@ namespace Ryujinx.Input.HLE.SmashSync
             {
                 if ((physicalLocal.Buttons & ReadyChord) == ReadyChord)
                 {
+                    // Suppress the synchronization chord from both the configured
+                    // physical slot and the canonical local-player slot.
+                    SetPlayer(states, Neutral((PlayerIndex)PhysicalPlayerIndex));
                     SetPlayer(states, Neutral(localPlayer));
                     _state = RunState.PausingForReady;
                     _pauseRequested = true;
