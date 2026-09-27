@@ -153,6 +153,16 @@ namespace Ryujinx.HLE.HOS.Services.Hid
 
         public void Update(IList<GamepadInput> states)
         {
+            UpdateInternal(states, null);
+        }
+
+        public void UpdateSmashSync(IList<GamepadInput> states, ulong sharedSamplingNumber)
+        {
+            UpdateInternal(states, sharedSamplingNumber);
+        }
+
+        private void UpdateInternal(IList<GamepadInput> states, ulong? forcedSamplingNumber)
+        {
             Remap();
 
             Span<bool> updated = stackalloc bool[10];
@@ -164,15 +174,40 @@ namespace Ryujinx.HLE.HOS.Services.Hid
 
                 updated[(int)state.PlayerId] = true;
 
-                UpdateInput(state);
+                UpdateInput(state, forcedSamplingNumber);
             }
 
             for (int i = 0; i < updated.Length; i++)
             {
                 if (!updated[i])
                 {
-                    UpdateDisconnectedInput((PlayerIndex)i);
+                    UpdateDisconnectedInput((PlayerIndex)i, forcedSamplingNumber);
                 }
+            }
+        }
+
+        public void ResetSmashSyncInputHistory()
+        {
+            Remap();
+
+            for (int i = (int)PlayerIndex.Player1; i <= (int)PlayerIndex.Player2; i++)
+            {
+                ref NpadInternalState npad = ref _device.Hid.SharedMemory.Npads[i].InternalState;
+
+                npad.FullKey.Clear();
+                npad.Handheld.Clear();
+                npad.JoyDual.Clear();
+                npad.JoyLeft.Clear();
+                npad.JoyRight.Clear();
+                npad.Palma.Clear();
+                npad.SystemExt.Clear();
+
+                npad.FullKeySixAxisSensor.Clear();
+                npad.HandheldSixAxisSensor.Clear();
+                npad.JoyDualSixAxisSensor.Clear();
+                npad.JoyDualRightSixAxisSensor.Clear();
+                npad.JoyLeftSixAxisSensor.Clear();
+                npad.JoyRightSixAxisSensor.Clear();
             }
         }
 
@@ -335,45 +370,57 @@ namespace Ryujinx.HLE.HOS.Services.Hid
             }
         }
 
-        private void UpdateUnusedInputIfNotEqual(ref RingLifo<NpadCommonState> currentlyUsed, ref RingLifo<NpadCommonState> possiblyUnused)
+        private void UpdateUnusedInputIfNotEqual(
+            ref RingLifo<NpadCommonState> currentlyUsed,
+            ref RingLifo<NpadCommonState> possiblyUnused,
+            ulong? forcedSamplingNumber = null)
         {
             if (!Unsafe.AreSame(ref currentlyUsed, ref possiblyUnused))
             {
                 NpadCommonState newState = new();
 
-                WriteNewInputEntry(ref possiblyUnused, ref newState);
+                WriteNewInputEntry(ref possiblyUnused, ref newState, forcedSamplingNumber);
             }
         }
 
-        private void WriteNewInputEntry(ref RingLifo<NpadCommonState> lifo, ref NpadCommonState state)
+        private void WriteNewInputEntry(
+            ref RingLifo<NpadCommonState> lifo,
+            ref NpadCommonState state,
+            ulong? forcedSamplingNumber = null)
         {
             ref NpadCommonState previousEntry = ref lifo.GetCurrentEntryRef();
 
-            state.SamplingNumber = previousEntry.SamplingNumber + 1;
+            state.SamplingNumber = forcedSamplingNumber ?? previousEntry.SamplingNumber + 1;
 
             lifo.Write(ref state);
         }
 
-        private void UpdateUnusedSixInputIfNotEqual(ref RingLifo<SixAxisSensorState> currentlyUsed, ref RingLifo<SixAxisSensorState> possiblyUnused)
+        private void UpdateUnusedSixInputIfNotEqual(
+            ref RingLifo<SixAxisSensorState> currentlyUsed,
+            ref RingLifo<SixAxisSensorState> possiblyUnused,
+            ulong? forcedSamplingNumber = null)
         {
             if (!Unsafe.AreSame(ref currentlyUsed, ref possiblyUnused))
             {
                 SixAxisSensorState newState = new();
 
-                WriteNewSixInputEntry(ref possiblyUnused, ref newState);
+                WriteNewSixInputEntry(ref possiblyUnused, ref newState, forcedSamplingNumber);
             }
         }
 
-        private void WriteNewSixInputEntry(ref RingLifo<SixAxisSensorState> lifo, ref SixAxisSensorState state)
+        private void WriteNewSixInputEntry(
+            ref RingLifo<SixAxisSensorState> lifo,
+            ref SixAxisSensorState state,
+            ulong? forcedSamplingNumber = null)
         {
             ref SixAxisSensorState previousEntry = ref lifo.GetCurrentEntryRef();
 
-            state.SamplingNumber = previousEntry.SamplingNumber + 1;
+            state.SamplingNumber = forcedSamplingNumber ?? previousEntry.SamplingNumber + 1;
 
             lifo.Write(ref state);
         }
 
-        private void UpdateInput(GamepadInput state)
+        private void UpdateInput(GamepadInput state, ulong? forcedSamplingNumber = null)
         {
             if (state.PlayerId == PlayerIndex.Unknown)
             {
@@ -423,37 +470,47 @@ namespace Ryujinx.HLE.HOS.Services.Hid
                     break;
             }
 
-            WriteNewInputEntry(ref lifo, ref newState);
+            WriteNewInputEntry(ref lifo, ref newState, forcedSamplingNumber);
 
             // Mirror data to Default layout just in case
             if (!currentNpad.StyleSet.HasFlag(NpadStyleTag.SystemExt))
             {
-                WriteNewInputEntry(ref currentNpad.SystemExt, ref newState);
+                WriteNewInputEntry(ref currentNpad.SystemExt, ref newState, forcedSamplingNumber);
             }
 
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.FullKey);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.Handheld);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyDual);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyLeft);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyRight);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.Palma);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.FullKey, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.Handheld, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyDual, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyLeft, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyRight, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.Palma, forcedSamplingNumber);
         }
 
-        private void UpdateDisconnectedInput(PlayerIndex index)
+        private void UpdateDisconnectedInput(PlayerIndex index, ulong? forcedSamplingNumber = null)
         {
             ref NpadInternalState currentNpad = ref _device.Hid.SharedMemory.Npads[(int)index].InternalState;
 
             NpadCommonState newState = new();
 
-            WriteNewInputEntry(ref currentNpad.FullKey, ref newState);
-            WriteNewInputEntry(ref currentNpad.Handheld, ref newState);
-            WriteNewInputEntry(ref currentNpad.JoyDual, ref newState);
-            WriteNewInputEntry(ref currentNpad.JoyLeft, ref newState);
-            WriteNewInputEntry(ref currentNpad.JoyRight, ref newState);
-            WriteNewInputEntry(ref currentNpad.Palma, ref newState);
+            WriteNewInputEntry(ref currentNpad.FullKey, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.Handheld, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.JoyDual, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.JoyLeft, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.JoyRight, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.Palma, ref newState, forcedSamplingNumber);
         }
 
         public void UpdateSixAxis(IList<SixAxisInput> states)
+        {
+            UpdateSixAxisInternal(states, null);
+        }
+
+        public void UpdateSixAxisSmashSync(IList<SixAxisInput> states, ulong sharedSamplingNumber)
+        {
+            UpdateSixAxisInternal(states, sharedSamplingNumber);
+        }
+
+        private void UpdateSixAxisInternal(IList<SixAxisInput> states, ulong? forcedSamplingNumber)
         {
             Span<bool> updated = stackalloc bool[10];
 
@@ -461,7 +518,7 @@ namespace Ryujinx.HLE.HOS.Services.Hid
             {
                 updated[(int)states[i].PlayerId] = true;
 
-                if (SetSixAxisState(states[i]))
+                if (SetSixAxisState(states[i], false, forcedSamplingNumber))
                 {
                     i++;
 
@@ -470,7 +527,7 @@ namespace Ryujinx.HLE.HOS.Services.Hid
                         return;
                     }
 
-                    SetSixAxisState(states[i], true);
+                    SetSixAxisState(states[i], true, forcedSamplingNumber);
                 }
             }
 
@@ -478,7 +535,7 @@ namespace Ryujinx.HLE.HOS.Services.Hid
             {
                 if (!updated[i])
                 {
-                    UpdateDisconnectedInputSixAxis((PlayerIndex)i);
+                    UpdateDisconnectedInputSixAxis((PlayerIndex)i, forcedSamplingNumber);
                 }
             }
         }
@@ -509,7 +566,10 @@ namespace Ryujinx.HLE.HOS.Services.Hid
             }
         }
 
-        private bool SetSixAxisState(SixAxisInput state, bool isRightPair = false)
+        private bool SetSixAxisState(
+            SixAxisInput state,
+            bool isRightPair = false,
+            ulong? forcedSamplingNumber = null)
         {
             if (state.PlayerId == PlayerIndex.Unknown)
             {
@@ -556,17 +616,17 @@ namespace Ryujinx.HLE.HOS.Services.Hid
 
             ref RingLifo<SixAxisSensorState> lifo = ref GetSixAxisSensorLifo(ref currentNpad, isRightPair);
 
-            WriteNewSixInputEntry(ref lifo, ref newState);
+            WriteNewSixInputEntry(ref lifo, ref newState, forcedSamplingNumber);
 
             bool needUpdateRight = currentNpad.StyleSet == NpadStyleTag.JoyDual && !isRightPair;
 
             if (!isRightPair)
             {
-                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.FullKeySixAxisSensor);
-                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.HandheldSixAxisSensor);
-                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.JoyDualSixAxisSensor);
-                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.JoyLeftSixAxisSensor);
-                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.JoyRightSixAxisSensor);
+                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.FullKeySixAxisSensor, forcedSamplingNumber);
+                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.HandheldSixAxisSensor, forcedSamplingNumber);
+                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.JoyDualSixAxisSensor, forcedSamplingNumber);
+                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.JoyLeftSixAxisSensor, forcedSamplingNumber);
+                UpdateUnusedSixInputIfNotEqual(ref lifo, ref currentNpad.JoyRightSixAxisSensor, forcedSamplingNumber);
             }
 
             if (!needUpdateRight && !isRightPair)
@@ -576,7 +636,7 @@ namespace Ryujinx.HLE.HOS.Services.Hid
                     Attributes = SixAxisSensorAttribute.IsConnected,
                 };
 
-                WriteNewSixInputEntry(ref currentNpad.JoyDualRightSixAxisSensor, ref emptyState);
+                WriteNewSixInputEntry(ref currentNpad.JoyDualRightSixAxisSensor, ref emptyState, forcedSamplingNumber);
             }
 
             return needUpdateRight;
@@ -605,7 +665,7 @@ namespace Ryujinx.HLE.HOS.Services.Hid
             return ((acceleration <= 1.0F) && (angularVelocity <= 1.0F));
         }
 
-        private void UpdateDisconnectedInputSixAxis(PlayerIndex index)
+        private void UpdateDisconnectedInputSixAxis(PlayerIndex index, ulong? forcedSamplingNumber = null)
         {
             ref NpadInternalState currentNpad = ref _device.Hid.SharedMemory.Npads[(int)index].InternalState;
 
@@ -614,12 +674,12 @@ namespace Ryujinx.HLE.HOS.Services.Hid
                 Attributes = SixAxisSensorAttribute.IsConnected,
             };
 
-            WriteNewSixInputEntry(ref currentNpad.FullKeySixAxisSensor, ref newState);
-            WriteNewSixInputEntry(ref currentNpad.HandheldSixAxisSensor, ref newState);
-            WriteNewSixInputEntry(ref currentNpad.JoyDualSixAxisSensor, ref newState);
-            WriteNewSixInputEntry(ref currentNpad.JoyDualRightSixAxisSensor, ref newState);
-            WriteNewSixInputEntry(ref currentNpad.JoyLeftSixAxisSensor, ref newState);
-            WriteNewSixInputEntry(ref currentNpad.JoyRightSixAxisSensor, ref newState);
+            WriteNewSixInputEntry(ref currentNpad.FullKeySixAxisSensor, ref newState, forcedSamplingNumber);
+            WriteNewSixInputEntry(ref currentNpad.HandheldSixAxisSensor, ref newState, forcedSamplingNumber);
+            WriteNewSixInputEntry(ref currentNpad.JoyDualSixAxisSensor, ref newState, forcedSamplingNumber);
+            WriteNewSixInputEntry(ref currentNpad.JoyDualRightSixAxisSensor, ref newState, forcedSamplingNumber);
+            WriteNewSixInputEntry(ref currentNpad.JoyLeftSixAxisSensor, ref newState, forcedSamplingNumber);
+            WriteNewSixInputEntry(ref currentNpad.JoyRightSixAxisSensor, ref newState, forcedSamplingNumber);
         }
 
         public void UpdateRumbleQueue(PlayerIndex index, Dictionary<byte, VibrationValue> dualVibrationValues)

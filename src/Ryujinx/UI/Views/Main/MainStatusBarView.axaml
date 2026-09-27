@@ -270,6 +270,47 @@
                 TextAlignment="Start" />
         </StackPanel>
         <StackPanel
+            Name="SmashSyncPanel"
+            Grid.Column="2"
+            Margin="8,0,8,0"
+            HorizontalAlignment="Right"
+            VerticalAlignment="Center"
+            Orientation="Horizontal">
+            <TextBlock
+                Name="SmashSyncStatusText"
+                Margin="4,0,6,0"
+                VerticalAlignment="Center"
+                Text="SmashSync" />
+            <Button
+                Name="SmashSyncRequestButton"
+                MinWidth="0"
+                Margin="2,0"
+                Padding="8,2"
+                Click="SmashSyncRequest_OnClick"
+                Content="Request" />
+            <Button
+                Name="SmashSyncAcceptButton"
+                MinWidth="0"
+                Margin="2,0"
+                Padding="8,2"
+                Click="SmashSyncAccept_OnClick"
+                Content="Accept" />
+            <Button
+                Name="SmashSyncRejectButton"
+                MinWidth="0"
+                Margin="2,0"
+                Padding="8,2"
+                Click="SmashSyncReject_OnClick"
+                Content="Reject" />
+            <Button
+                Name="SmashSyncDisconnectButton"
+                MinWidth="0"
+                Margin="2,0"
+                Padding="8,2"
+                Click="SmashSyncDisconnect_OnClick"
+                Content="Disconnect" />
+        </StackPanel>
+        <StackPanel
             Grid.Column="3"
             Margin="0, 0, 5, 0"
             IsVisible="{Binding IsGameRunning}"

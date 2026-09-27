@@ -1,0 +1,18 @@
+{
+  "Mode": "Off",
+  "LocalPlayer": 1,
+  "PhysicalPlayer": 1,
+  "PeerAddress": "100.64.0.2",
+  "LocalPort": 27888,
+  "PeerPort": 27888,
+  "SyncHz": 60,
+  "InputDelayTicks": 1,
+  "LockstepTimeoutMs": 5000,
+  "HandshakeTimeoutMs": 30000,
+  "Redundancy": 3,
+  "ReplayFile": "smashsync-record.jsonl",
+  "RecordFile": "smashsync-record.jsonl",
+  "LogFile": "smashsync-session.log",
+  "ConfigureTwoPlayers": true,
+  "RequireReadyChord": false
+}

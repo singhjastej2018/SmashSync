@@ -3,6 +3,7 @@ using Ryujinx.Common.Configuration.Hid;
 using Ryujinx.Common.Configuration.Hid.Controller;
 using Ryujinx.Common.Configuration.Hid.Keyboard;
 using Ryujinx.HLE.HOS.Services.Hid;
+using Ryujinx.Input.HLE.SmashSync;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -21,6 +22,7 @@ namespace Ryujinx.Input.HLE
     public class NpadManager : IDisposable
     {
         private readonly CemuHookClient _cemuHookClient;
+        private readonly SmashSyncSession _smashSync;
 
         private readonly Lock _lock = new();
 
@@ -49,6 +51,7 @@ namespace Ryujinx.Input.HLE
         {
             _controllers = new NpadController[MaxControllers];
             _cemuHookClient = new CemuHookClient(this);
+            _smashSync = SmashSyncSession.TryCreate();
 
             _keyboardDriver = keyboardDriver;
             _gamepadDriver = gamepadDriver;
@@ -65,6 +68,12 @@ namespace Ryujinx.Input.HLE
         {
             lock (_lock)
             {
+                if (_smashSync?.ConfigureTwoPlayers == true)
+                {
+                    ConfigureSmashSyncControllers();
+                    return;
+                }
+
                 List<InputConfig> validInputs = [];
                 foreach (InputConfig inputConfigEntry in _inputConfig)
                 {
@@ -77,6 +86,43 @@ namespace Ryujinx.Input.HLE
                 _device.Hid.RefreshInputConfig(validInputs);
             }
         }
+
+        private void ConfigureSmashSyncControllers()
+        {
+            _device.Hid.Npads.Configure(
+                new ControllerConfig { Player = PlayerIndex.Player1, Type = Ryujinx.HLE.HOS.Services.Hid.ControllerType.ProController },
+                new ControllerConfig { Player = PlayerIndex.Player2, Type = Ryujinx.HLE.HOS.Services.Hid.ControllerType.ProController });
+        }
+
+        public void PumpSmashSyncControl() => _smashSync?.PumpControl();
+
+        public void RefreshSmashSyncStateFingerprint() => _smashSync?.AttachDevice(_device);
+
+        public bool SmashSyncPauseRequested => _smashSync?.PauseRequested == true;
+        public bool SmashSyncResumeRequested => _smashSync?.ResumeRequested == true;
+        public bool SmashSyncOwnsPause => _smashSync?.OwnsPause == true;
+        public bool SmashSyncCanAdoptExistingPause => _smashSync?.CanAdoptExistingPause == true;
+        public bool SmashSyncCanonicalRouting => _smashSync?.CanonicalRouting == true;
+
+        public void NotifySmashSyncPaused()
+        {
+            bool startupBarrier = _smashSync?.CanAdoptExistingPause == true;
+
+            if (startupBarrier && _device != null)
+            {
+                ConfigureSmashSyncControllers();
+                _device.Hid.Npads.ResetSmashSyncInputHistory();
+                _device.Hid.Keyboard.ResetSmashSyncInputHistory();
+                _device.Hid.Mouse.ResetSmashSyncInputHistory();
+                _device.Hid.Touchscreen.ResetSmashSyncInputHistory();
+                _device.Hid.DebugPad.ResetSmashSyncInputHistory();
+            }
+
+            _smashSync?.NotifyPaused();
+        }
+        public void WaitForSmashSyncResumeEpoch() => _smashSync?.WaitForResumeEpoch();
+        public void NotifySmashSyncResumeDispatch() => _smashSync?.NotifyResumeDispatch();
+        public void NotifySmashSyncResumed() => _smashSync?.NotifyResumed();
 
         private void HandleOnGamepadDisconnected(string obj)
         {
@@ -241,12 +287,38 @@ namespace Ryujinx.Input.HLE
                 _enableKeyboard = enableKeyboard;
                 _enableMouse = enableMouse;
 
-                _device.Hid.RefreshInputConfig(validInputs);
+                if (_smashSync?.ConfigureTwoPlayers == true)
+                {
+                    ConfigureSmashSyncControllers();
+                }
+                else
+                {
+                    _device.Hid.RefreshInputConfig(validInputs);
+                }
             }
         }
 
         private PlayerInputAssignment GetPlayerInputAssignment(InputConfig inputConfig)
         {
+            if (_smashSync?.CanonicalRouting == true &&
+                (PlayerIndex)(int)inputConfig.PlayerIndex == _smashSync.CanonicalLocalPlayer)
+            {
+                PlayerInputAssignment fixedLocal = new()
+                {
+                    PlayerIndex = inputConfig.PlayerIndex,
+                    EnableDynamicInputSwap = false,
+                };
+
+                AssignedInputDevice primary = PlayerInputAssignmentHelper.CreatePrimaryDevice(inputConfig);
+                if (primary != null &&
+                    !string.Equals(primary.Id, SmashSyncRemoteGamepadDriver.RemoteId, StringComparison.Ordinal))
+                {
+                    fixedLocal.Devices.Add(primary);
+                }
+
+                return fixedLocal;
+            }
+
             PlayerInputAssignment playerInputAssignment = _playerInputAssignments.FirstOrDefault(assignment => assignment.PlayerIndex == inputConfig.PlayerIndex);
 
             if (playerInputAssignment != null)
@@ -376,11 +448,12 @@ namespace Ryujinx.Input.HLE
         {
             _device = device;
             _device.Configuration.RefreshInputConfig = RefreshInputConfigForHLE;
+            _smashSync?.AttachDevice(device);
 
             ReloadConfiguration(inputConfig, playerInputAssignments, enableKeyboard, enableMouse);
         }
 
-        public void Update(float aspectRatio = 1)
+        public void Update(float aspectRatio = 1, bool processSmashSync = true)
         {
             lock (_lock)
             {
@@ -398,9 +471,15 @@ namespace Ryujinx.Input.HLE
                     PlayerIndex playerIndex = (PlayerIndex)inputConfig.PlayerIndex;
 
                     bool isJoyconPair = false;
+                    bool canonicalRemote =
+                        _smashSync?.CanonicalRouting == true &&
+                        playerIndex == _smashSync.CanonicalRemotePlayer;
 
-                    // Do we allow input updates and is a controller connected?
-                    if (_inputUpdateBlockCount == 0 && controller != null)
+                    // During SmashSync netplay the canonical remote slot is supplied
+                    // exclusively by the network session. Do not poll its visible
+                    // Ryujinx device here, otherwise a peer input can be selected as a
+                    // local source and echoed back to the other side.
+                    if (!canonicalRemote && _inputUpdateBlockCount == 0 && controller != null)
                     {
                         DriverConfigurationUpdate(ref controller, inputConfig, GetPlayerInputAssignment(inputConfig));
 
@@ -438,20 +517,46 @@ namespace Ryujinx.Input.HLE
                     }
                 }
 
-                if (_inputUpdateBlockCount == 0 && _enableKeyboard)
+                bool canonicalRouting = _smashSync?.CanonicalRouting == true;
+
+                if (!canonicalRouting && _inputUpdateBlockCount == 0 && _enableKeyboard)
                 {
                     hleKeyboardInput = NpadController.GetHLEKeyboardInput(_keyboardDriver);
                 }
 
-                _device.Hid.Npads.Update(_hleInputStates);
-                _device.Hid.Npads.UpdateSixAxis(_hleMotionStates);
+                bool commitGuestHid = true;
+                if (processSmashSync)
+                {
+                    commitGuestHid = _smashSync?.ProcessInputs(_hleInputStates, _hleMotionStates) ?? true;
+                }
 
-                if (hleKeyboardInput.HasValue)
+                // In synchronized netplay, one shared SmashSync sequence maps to
+                // exactly one guest HID sample. Host-loop iterations between shared
+                // ticks must not increment the guest Npad sampling number.
+                if (commitGuestHid)
+                {
+                    if (_smashSync?.CanonicalRouting == true)
+                    {
+                        // SmashSync's logical tick is the canonical HID sampling
+                        // number. This prevents machine-local pre-session HID history
+                        // from giving P1/P2 different sample-number timelines.
+                        ulong sharedSamplingNumber = _smashSync.SharedTick;
+                        _device.Hid.Npads.UpdateSmashSync(_hleInputStates, sharedSamplingNumber);
+                        _device.Hid.Npads.UpdateSixAxisSmashSync(_hleMotionStates, sharedSamplingNumber);
+                    }
+                    else
+                    {
+                        _device.Hid.Npads.Update(_hleInputStates);
+                        _device.Hid.Npads.UpdateSixAxis(_hleMotionStates);
+                    }
+                }
+
+                if (!canonicalRouting && hleKeyboardInput.HasValue)
                 {
                     _device.Hid.Keyboard.Update(hleKeyboardInput.Value);
                 }
 
-                if (_enableMouse)
+                if (!canonicalRouting && _enableMouse)
                 {
                     IMouse mouse = _mouseDriver.GetGamepad("0") as IMouse;
 
@@ -490,12 +595,15 @@ namespace Ryujinx.Input.HLE
                     
                     ArrayPool<bool>.Shared.Return(mouseInput.ButtonState);
                 }
-                else
+                else if (!canonicalRouting)
                 {
                     _device.Hid.Mouse.Update(0, 0);
                 }
 
-                _device.TamperMachine.UpdateInput(_hleInputStates);
+                if (commitGuestHid)
+                {
+                    _device.TamperMachine.UpdateInput(_hleInputStates);
+                }
             }
         }
 
@@ -517,6 +625,7 @@ namespace Ryujinx.Input.HLE
                 {
                     if (!_isDisposed)
                     {
+                        _smashSync?.Dispose();
                         _cemuHookClient.Dispose();
 
                         _gamepadDriver.OnGamepadConnected -= HandleOnGamepadConnected;
