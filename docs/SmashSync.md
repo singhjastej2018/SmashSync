@@ -149,3 +149,12 @@ During an accepted SmashSync session, only the canonical local player's physical
 ## Synchronized release
 
 For accepted pre-game sessions, the application main thread is suspended with the emulator's normal process-pause flag before guest execution begins. Both peers remain suspended through READY/START. SmashSync measures UDP RTT while paused, then P1 sends a RELEASE barrier with a future lead time. P2 compensates approximately half its measured RTT before scheduling its resume, reducing the one-way START/ACK head-start that previously allowed one guest to begin several milliseconds before the other.
+
+
+## Strict start-state and HID sequencing
+
+Before releasing an accepted netplay session, SmashSync computes a 64-bit SHA-256-derived fingerprint over the active title/version, language/region/docked mode, and the active title's account save-data contents. Only the fingerprint crosses the network. Save files are not transferred.
+
+If the fingerprints differ, the guest remains paused and the session log reports `START STATE MISMATCH`. This prevents two already-different SSBU menu/battle states from silently continuing with identical input packets.
+
+During synchronized netplay, host input polling no longer writes a fresh guest Npad sample on every UI-loop iteration. A guest HID sample is committed only when the shared SmashSync logical sequence advances. Thus one logical sequence corresponds to one P1/P2 HID sample on both machines, reducing drift caused by different host-loop sampling counts.
