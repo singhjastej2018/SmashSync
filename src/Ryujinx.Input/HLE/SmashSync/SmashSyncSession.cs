@@ -177,6 +177,12 @@ namespace Ryujinx.Input.HLE.SmashSync
                 return;
             }
 
+            if (device.Processes?.ActiveApplication == null || device.Processes.ActiveApplication.ProgramId == 0)
+            {
+                _stateFingerprintReady = false;
+                return;
+            }
+
             try
             {
                 _localStateFingerprint = device.GetActiveApplicationStateFingerprint();
