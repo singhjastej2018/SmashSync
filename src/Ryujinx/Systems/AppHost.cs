@@ -1388,6 +1388,7 @@ namespace Ryujinx.Ava.Systems
                 // quantizing resume to whichever host render-loop iteration happens
                 // to notice the release first.
                 NpadManager.WaitForSmashSyncResumeEpoch();
+                NpadManager.NotifySmashSyncResumeDispatch();
                 Device.System.TogglePauseEmulation(false);
                 NpadManager.NotifySmashSyncResumed();
             }
