@@ -59,6 +59,20 @@ namespace Ryujinx.Cpu
         }
 
         /// <inheritdoc/>
+        public void Reset()
+        {
+            bool wasRunning = _tickCounter.IsRunning;
+            _tickCounter.Reset();
+            _acumElapsedTicks = 0;
+            _lastElapsedTicks = 0;
+
+            if (wasRunning)
+            {
+                _tickCounter.Start();
+            }
+        }
+
+        /// <inheritdoc/>
         public void Resume()
         {
             _tickCounter.Start();
