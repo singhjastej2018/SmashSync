@@ -1366,7 +1366,9 @@ namespace Ryujinx.Ava.Systems
             {
                 if (!Device.System.IsPaused)
                 {
-                    Pause();
+                    // SmashSync synchronization pauses are internal barriers, not
+                    // user pauses. Avoid the normal UI/title/log/GC pause path.
+                    Device.System.TogglePauseEmulation(true);
                 }
 
                 NpadManager.NotifySmashSyncPaused();
@@ -1379,7 +1381,7 @@ namespace Ryujinx.Ava.Systems
                 // quantizing resume to whichever host render-loop iteration happens
                 // to notice the release first.
                 NpadManager.WaitForSmashSyncResumeEpoch();
-                Resume();
+                Device.System.TogglePauseEmulation(false);
                 NpadManager.NotifySmashSyncResumed();
             }
 
@@ -1396,6 +1398,20 @@ namespace Ryujinx.Ava.Systems
             }
 
             NpadManager.Update(ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat(), !Device.System.IsPaused);
+
+            // A remote tick can become missing while ProcessInputs is executing.
+            // Enter the lockstep barrier immediately in this same host iteration,
+            // rather than allowing another full UpdateFrame worth of guest execution.
+            if (NpadManager.SmashSyncPauseRequested && !NpadManager.SmashSyncOwnsPause)
+            {
+                if (!Device.System.IsPaused)
+                {
+                    Device.System.TogglePauseEmulation(true);
+                }
+
+                NpadManager.NotifySmashSyncPaused();
+                return true;
+            }
 
             if (_viewModel.IsActive)
             {
