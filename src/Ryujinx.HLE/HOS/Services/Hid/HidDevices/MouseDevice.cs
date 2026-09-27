@@ -7,6 +7,11 @@ namespace Ryujinx.HLE.HOS.Services.Hid
     {
         public MouseDevice(Switch device, bool active) : base(device, active) { }
 
+        public void ResetSmashSyncInputHistory()
+        {
+            _device.Hid.SharedMemory.Mouse.Clear();
+        }
+
         public void Update(int mouseX, int mouseY, uint buttons = 0, int scrollX = 0, int scrollY = 0, bool connected = false)
         {
             ref RingLifo<MouseState> lifo = ref _device.Hid.SharedMemory.Mouse;
