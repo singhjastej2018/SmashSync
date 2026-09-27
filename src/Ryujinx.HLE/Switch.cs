@@ -164,13 +164,13 @@ namespace Ryujinx.HLE
 
         public void ArmApplicationStartPause()
         {
-            Configuration.DebuggerSuspendOnStart = true;
+            Configuration.SuspendApplicationOnStart = true;
             System.TogglePauseEmulation(true);
         }
 
         public void DisarmApplicationStartPause()
         {
-            Configuration.DebuggerSuspendOnStart = false;
+            Configuration.SuspendApplicationOnStart = false;
         }
 
         public void SetVolume(float volume) => AudioDeviceDriver.Volume = Math.Clamp(volume, 0f, 1f);
