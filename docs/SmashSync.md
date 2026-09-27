@@ -1,39 +1,46 @@
-# SmashSync v0
+# SmashSync pre-game netplay
 
 SmashSync is opt-in. Without a `smashsync.json` file in the SmashSync data directory, input behaves like normal Ryujinx.
 
-The v0 protocol uses a **shared logical input tick** at a configured rate (60 Hz by default). Local Ryujinx poll counters and wall-clock timestamps are not gameplay authority. Timestamps are used only for pacing and RTT diagnostics.
+The current protocol has two separate layers:
 
-## Windows x64 first
+1. **Pre-game lobby/control:** TCP on the configured SmashSync port. This exists while the Ryujinx UI is open and carries only SmashSync control messages such as request, accept, heartbeat, and disconnect.
+2. **Gameplay input:** fixed-size UDP controller packets on the same numeric port. Keyboard, mouse, game files, save data, video, and audio are never sent by SmashSync.
 
-The first supported test target is Windows x64 on both machines, using the same SmashSync commit/build and matching SSBU version, update/DLC, firmware, and relevant emulator settings.
+The default port is `27888`, so Windows Firewall must allow both **TCP 27888** and **UDP 27888** on both PCs.
 
-## Record
+## Canonical players
 
-```json
-{
-  "Mode": "Record",
-  "RecordFile": "smashsync-record.jsonl"
-}
-```
+Player identity is fixed on both machines:
 
-This writes the exact P1/P2 input stream indexed by SmashSync shared logical input tick.
+- P1 is always Player 1.
+- P2 is always Player 2.
 
-## Replay
+After the pre-game handshake is accepted, the remote peer appears as a Ryujinx gamepad named similar to:
 
-```json
-{
-  "Mode": "Replay",
-  "ReplayFile": "smashsync-record.jsonl",
-  "ConfigureTwoPlayers": true
-}
-```
+`SmashSync Remote P2 — 100.x.x.x`
 
-Replay replaces P1/P2 controller state with the recorded stream and forces P1/P2 motion neutral. The session log prints a rolling input digest every 60 ticks.
+or
 
-## Netplay
+`SmashSync Remote P1 — 100.x.x.x`
 
-Player 1 machine:
+Configure controllers before launching SSBU:
+
+### P1 machine
+
+- Ryujinx P1: local physical controller
+- Ryujinx P2: `SmashSync Remote P2`
+
+### P2 machine
+
+- Ryujinx P1: `SmashSync Remote P1`
+- Ryujinx P2: local physical controller
+
+The old `PhysicalPlayer` remapping remains only as a fallback for legacy/chord-based sessions. After an accepted pre-game lobby connection, SmashSync reads the local controller from its canonical `LocalPlayer` slot.
+
+## Netplay configuration
+
+Player 1:
 
 ```json
 {
@@ -46,79 +53,90 @@ Player 1 machine:
   "SyncHz": 60,
   "InputDelayTicks": 2,
   "Redundancy": 3,
-  "RequireReadyChord": true,
+  "RequireReadyChord": false,
   "ConfigureTwoPlayers": true
 }
 ```
 
-Player 2 machine can keep its physical controller configured in Ryujinx as P1 and remap it to canonical P2:
+Player 2:
 
 ```json
 {
   "Mode": "Netplay",
   "LocalPlayer": 2,
-  "PhysicalPlayer": 1,
+  "PhysicalPlayer": 2,
   "PeerAddress": "100.x.x.x",
   "LocalPort": 27888,
   "PeerPort": 27888,
   "SyncHz": 60,
   "InputDelayTicks": 2,
   "Redundancy": 3,
-  "RequireReadyChord": true,
+  "RequireReadyChord": false,
   "ConfigureTwoPlayers": true
 }
 ```
 
-Use each other’s Tailscale IPv4 address for `PeerAddress`.
+Use the other PC's Tailscale IPv4 address as `PeerAddress`.
 
-## Start synchronization
+## Pre-game handshake
 
-When both players reach the desired in-match state, each holds:
+Launch SmashSync on both PCs before launching SSBU.
 
-`L + R + Plus + Minus`
+The bottom status bar shows the configured peer address and lobby state.
 
-SmashSync removes that chord from game input and requests an emulator pause. Both instances remain paused while they exchange READY/START messages. P1 creates the session ID. When the barrier completes, both reset their shared logical input counter to tick 0 and resume.
+1. One player clicks **Request**.
+2. The other player sees an incoming request and clicks **Accept**.
+3. Both sides show **connected**.
+4. The remote SmashSync controller becomes available in Ryujinx input devices.
+5. Configure the canonical P1/P2 controller slots as described above.
 
-They do **not** need matching local emulator frame numbers or clocks.
+A game launch is blocked while Netplay mode is enabled but the pre-game peer handshake is not connected.
 
-## Runtime lag
+## Launch and automatic game barrier
 
-Before advancing a shared tick that requires remote input, SmashSync checks whether that exact remote tick has arrived. If it has not, SmashSync pauses the emulator before the HID update, keeps receiving UDP packets while paused, and resumes when the input is available.
+Both PCs still run SSBU locally. SmashSync does not remotely execute programs on the other PC.
 
-This is buffered lockstep, not rollback. If one machine cannot sustain full-speed emulation, the session will stall to the slower machine.
+Either player may launch SSBU first. The first instance automatically enters a SmashSync-owned pause once the game-side input session is initialized and waits for the other machine to launch. When both game-side sessions are present:
 
-## Packet model
+- both exchange READY packets over UDP;
+- P1 creates the gameplay session ID;
+- P2 acknowledges it;
+- both reset the shared logical input tick to 0;
+- both resume automatically.
 
-Input packets contain:
+The old `L + R + Plus + Minus` chord remains only as a fallback when no accepted pre-game lobby exists.
 
-- protocol/session ID
-- shared logical tick
-- sequence number
-- canonical player ID
-- buttons and both sticks
-- up to 3 recent input ticks for loss redundancy
+## Runtime input synchronization
 
-Ping/pong timestamps are diagnostics only.
+The shared logical input tick runs at 60 Hz by default. Each input packet carries:
+
+- protocol/session ID;
+- shared logical tick;
+- sequence number;
+- canonical player ID;
+- buttons and both sticks;
+- up to three recent input ticks for UDP loss redundancy.
+
+Before consuming a tick that requires remote input, SmashSync checks whether that exact remote tick has arrived. If not, it pauses before the HID update while networking remains active, then resumes when the missing input arrives.
+
+This is buffered lockstep, not rollback.
 
 ## Current limitation
 
-The v0 shared tick is paced independently at 60 Hz and applied through Ryujinx HID; it is not yet a verified SSBU internal simulation-frame counter. Matching input digests prove both instances consumed the same controller stream; they do not by themselves prove whole-game determinism. State hashing is the next milestone before rollback.
+The shared input tick is still a SmashSync HID clock, not a verified SSBU internal simulation-frame counter. The new pre-game handshake and automatic launch barrier make startup substantially more deterministic, but they do not prove that two independent SSBU processes have identical hidden state.
 
+Matching input digests prove that both sides consumed the same controller stream. A future milestone is guest/game state hashing at a verified simulation boundary.
 
 ## Determinism baseline
 
-For the first two-PC validation, keep these identical on both machines:
+For initial testing, keep these identical on both machines:
 
-- the exact SmashSync build/commit
-- SSBU base game version and update
-- installed DLC set
-- system firmware
-- relevant emulator settings and graphics backend
-- match rules, stage, fighters, and other gameplay-affecting options
-- mods/cheats disabled unless they are intentionally identical
+- exact SmashSync build/commit;
+- SSBU base game/update version;
+- installed DLC set;
+- system firmware;
+- gameplay-affecting emulator settings;
+- match rules, stage, fighters, and other gameplay-affecting options;
+- mods/cheats disabled unless intentionally identical.
 
-Normal SSBU save data does not have to remain identical forever, but using equivalent or copied save data for the first validation removes differences in unlocks, rulesets, and settings.
-
-Shader caches do not need to match and should remain local to each machine. Pre-warming caches can reduce one-sided shader-compilation stalls, but the cache is not part of SmashSync's shared logical state.
-
-SmashSync v0 does not depend on emulator save-state/snapshot functionality.
+Equivalent save data is useful for eliminating differences in unlocks, rulesets, and settings. Shader caches do not need to match.
