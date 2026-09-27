@@ -14,5 +14,5 @@
   "RecordFile": "smashsync-record.jsonl",
   "LogFile": "smashsync-session.log",
   "ConfigureTwoPlayers": true,
-  "RequireReadyChord": true
+  "RequireReadyChord": false
 }
