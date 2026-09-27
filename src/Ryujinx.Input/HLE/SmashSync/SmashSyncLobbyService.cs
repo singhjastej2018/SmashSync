@@ -62,6 +62,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private static int _saveNextSequence;
         private static byte[] _receivedSaveSnapshot;
         private static string _receivedSaveTitle;
+        private static string _authoritativeSaveSha;
 
         public static event Action ConnectionChanged;
 
@@ -85,6 +86,16 @@ namespace Ryujinx.Input.HLE.SmashSync
             }
         }
         public static string LastError => _lastError;
+        public static string AuthoritativeSaveSha
+        {
+            get
+            {
+                lock (SaveSync)
+                {
+                    return _authoritativeSaveSha;
+                }
+            }
+        }
 
         public static string StatusText
         {
@@ -320,6 +331,11 @@ namespace Ryujinx.Input.HLE.SmashSync
             }
 
             string sha = Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant();
+
+            lock (SaveSync)
+            {
+                _authoritativeSaveSha = sha;
+            }
 
             lock (WriteSync)
             {
@@ -746,6 +762,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 {
                     _receivedSaveSnapshot = snapshot;
                     _receivedSaveTitle = _saveReceiveTitle;
+                    _authoritativeSaveSha = actualSha;
                     Log($"authoritative P1 save received title={_receivedSaveTitle} bytes={snapshot.Length} sha256={actualSha[..16]}...");
                     SaveReceivedEvent.Set();
                 }
@@ -854,6 +871,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             _connectionWriter = null;
             _connectionNonce = 0;
             lock (InputSync) _latestRemoteInput = default;
+            lock (SaveSync) _authoritativeSaveSha = null;
             ResetSaveTransfer();
         }
 
