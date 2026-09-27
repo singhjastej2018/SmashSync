@@ -2,6 +2,7 @@ using Ryujinx.Common.Configuration.Hid;
 using Ryujinx.Common.Configuration.Hid.Controller;
 using Ryujinx.Common.Configuration.Hid.Keyboard;
 using Ryujinx.HLE.HOS.Services.Hid;
+using Ryujinx.Input.HLE.SmashSync;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -19,6 +20,7 @@ namespace Ryujinx.Input.HLE
     public class NpadManager : IDisposable
     {
         private readonly CemuHookClient _cemuHookClient;
+        private readonly SmashSyncSession _smashSync;
 
         private readonly Lock _lock = new();
 
@@ -42,6 +44,7 @@ namespace Ryujinx.Input.HLE
         {
             _controllers = new NpadController[MaxControllers];
             _cemuHookClient = new CemuHookClient(this);
+            _smashSync = SmashSyncSession.TryCreate();
 
             _keyboardDriver = keyboardDriver;
             _gamepadDriver = gamepadDriver;
@@ -56,6 +59,12 @@ namespace Ryujinx.Input.HLE
         {
             lock (_lock)
             {
+                if (_smashSync?.ConfigureTwoPlayers == true)
+                {
+                    ConfigureSmashSyncControllers();
+                    return;
+                }
+
                 List<InputConfig> validInputs = [];
                 foreach (InputConfig inputConfigEntry in _inputConfig)
                 {
@@ -68,6 +77,20 @@ namespace Ryujinx.Input.HLE
                 _device.Hid.RefreshInputConfig(validInputs);
             }
         }
+
+        private void ConfigureSmashSyncControllers()
+        {
+            _device.Hid.Npads.Configure(
+                new ControllerConfig { Player = PlayerIndex.Player1, Type = Ryujinx.HLE.HOS.Services.Hid.ControllerType.ProController },
+                new ControllerConfig { Player = PlayerIndex.Player2, Type = Ryujinx.HLE.HOS.Services.Hid.ControllerType.ProController });
+        }
+
+        public void PumpSmashSyncControl() => _smashSync?.PumpControl();
+        public bool SmashSyncPauseRequested => _smashSync?.PauseRequested == true;
+        public bool SmashSyncResumeRequested => _smashSync?.ResumeRequested == true;
+        public bool SmashSyncOwnsPause => _smashSync?.OwnsPause == true;
+        public void NotifySmashSyncPaused() => _smashSync?.NotifyPaused();
+        public void NotifySmashSyncResumed() => _smashSync?.NotifyResumed();
 
         private void HandleOnGamepadDisconnected(string obj)
         {
@@ -168,7 +191,14 @@ namespace Ryujinx.Input.HLE
                 _enableKeyboard = enableKeyboard;
                 _enableMouse = enableMouse;
 
-                _device.Hid.RefreshInputConfig(validInputs);
+                if (_smashSync?.ConfigureTwoPlayers == true)
+                {
+                    ConfigureSmashSyncControllers();
+                }
+                else
+                {
+                    _device.Hid.RefreshInputConfig(validInputs);
+                }
             }
         }
 
@@ -210,7 +240,7 @@ namespace Ryujinx.Input.HLE
             ReloadConfiguration(inputConfig, enableKeyboard, enableMouse);
         }
 
-        public void Update(float aspectRatio = 1)
+        public void Update(float aspectRatio = 1, bool processSmashSync = true)
         {
             lock (_lock)
             {
@@ -271,6 +301,11 @@ namespace Ryujinx.Input.HLE
                 if (!_blockInputUpdates && _enableKeyboard)
                 {
                     hleKeyboardInput = NpadController.GetHLEKeyboardInput(_keyboardDriver);
+                }
+
+                if (processSmashSync)
+                {
+                    _smashSync?.ProcessInputs(hleInputStates, hleMotionStates);
                 }
 
                 _device.Hid.Npads.Update(hleInputStates);
@@ -343,6 +378,7 @@ namespace Ryujinx.Input.HLE
                 {
                     if (!_isDisposed)
                     {
+                        _smashSync?.Dispose();
                         _cemuHookClient.Dispose();
 
                         _gamepadDriver.OnGamepadConnected -= HandleOnGamepadConnected;
