@@ -109,7 +109,8 @@ namespace Ryujinx.Input.HLE.SmashSync
         public ulong SharedTick => _tick;
 
         private int LocalPlayerIndex => _config.LocalPlayer - 1;
-        private int PhysicalPlayerIndex => _config.PhysicalPlayer - 1;
+        private int PhysicalPlayerIndex =>
+            SmashSyncLobbyService.IsConnected ? LocalPlayerIndex : _config.PhysicalPlayer - 1;
         private int RemotePlayerIndex => LocalPlayerIndex == 0 ? 1 : 0;
 
         private SmashSyncSession(SmashSyncConfig config)
