@@ -350,7 +350,10 @@ namespace Ryujinx.Input.HLE.SmashSync
                 return false;
             }
 
-            long deadline = Environment.TickCount64 + Math.Max(1000, timeoutMs);
+            bool waitWithoutDeadline = timeoutMs <= 0;
+            long deadline = waitWithoutDeadline
+                ? long.MaxValue
+                : Environment.TickCount64 + Math.Max(1000, timeoutMs);
 
             while (IsConnected)
             {
@@ -367,14 +370,23 @@ namespace Ryujinx.Input.HLE.SmashSync
                     }
                 }
 
-                int remaining = (int)Math.Clamp(deadline - Environment.TickCount64, 0, int.MaxValue);
-                if (remaining <= 0 || !SaveReceivedEvent.Wait(Math.Min(remaining, 250)))
+                int waitMs;
+                if (waitWithoutDeadline)
                 {
+                    waitMs = 250;
+                }
+                else
+                {
+                    int remaining = (int)Math.Clamp(deadline - Environment.TickCount64, 0, int.MaxValue);
                     if (remaining <= 0)
                     {
                         break;
                     }
+
+                    waitMs = Math.Min(remaining, 250);
                 }
+
+                SaveReceivedEvent.Wait(waitMs);
             }
 
             return false;
