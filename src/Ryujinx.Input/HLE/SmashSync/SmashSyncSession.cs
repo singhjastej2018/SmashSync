@@ -537,8 +537,14 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _lastP1 = Neutral(PlayerIndex.Player1);
                 _lastP2 = Neutral(PlayerIndex.Player2);
                 _haveLastCombined = true;
+                _digest = 14695981039346656037UL;
                 _localHistory.Clear();
                 lock (_remoteLock) _remoteHistory.Clear();
+                lock (_digestLock)
+                {
+                    _localDigestCheckpoints.Clear();
+                    _remoteDigestCheckpoints.Clear();
+                }
                 SendControl(PacketType.Ready, _lobbyToken, 0);
                 Log("local READY: emulation paused at synchronization barrier");
             }
