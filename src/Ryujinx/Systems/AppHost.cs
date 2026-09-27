@@ -1043,7 +1043,7 @@ namespace Ryujinx.Ava.Systems
             // Initialize Configuration. For an accepted SmashSync session,
             // arm the synchronized-start pause before Switch construction so the
             // guest tick source is frozen from its earliest usable instant.
-            HleConfiguration hleConfiguration = ConfigurationState.Instance.CreateHleConfiguration()
+            Ryujinx.HLE.HleConfiguration hleConfiguration = ConfigurationState.Instance.CreateHleConfiguration()
                 .ConfigureSynchronizedStartPause(SmashSyncLobbyService.NetplayEnabled && SmashSyncLobbyService.IsConnected)
                 .Configure(
                     VirtualFileSystem,
