@@ -281,6 +281,12 @@ namespace Ryujinx.HLE
         /// <summary>
         /// Set the pre-configured services to use for this <see cref="HleConfiguration"/> instance.
         /// </summary>
+        public HleConfiguration ConfigureSynchronizedStartPause(bool enabled)
+        {
+            SuspendApplicationOnStart = enabled;
+            return this;
+        }
+
         public HleConfiguration Configure(
             VirtualFileSystem virtualFileSystem,
             LibHacHorizonManager libHacHorizonManager,
