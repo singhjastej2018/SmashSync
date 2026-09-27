@@ -96,6 +96,8 @@ namespace Ryujinx.Input.HLE
 
         public void PumpSmashSyncControl() => _smashSync?.PumpControl();
 
+        public void RefreshSmashSyncStateFingerprint() => _smashSync?.AttachDevice(_device);
+
         public bool SmashSyncPauseRequested => _smashSync?.PauseRequested == true;
         public bool SmashSyncResumeRequested => _smashSync?.ResumeRequested == true;
         public bool SmashSyncOwnsPause => _smashSync?.OwnsPause == true;
