@@ -476,7 +476,7 @@ namespace Ryujinx.HLE
             }
         }
 
-        public ulong GetActiveApplicationStateFingerprint()
+        public ulong GetActiveApplicationStateFingerprint(string authoritativeSaveSha = null)
         {
             ulong programId = Processes.ActiveApplication?.ProgramId ?? 0UL;
             string version = Processes.ActiveApplication?.DisplayVersion ?? string.Empty;
@@ -500,21 +500,27 @@ namespace Ryujinx.HLE
             AddText(hash, Configuration.Region.ToString());
             AddText(hash, Configuration.EnableDockedMode ? "docked" : "handheld");
             AddText(hash, Configuration.MemoryConfiguration.ToString());
-            AddText(hash, Configuration.MemoryManagerMode.ToString());
             AddText(hash, TickScalar.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
-            AddText(hash, Configuration.UseHypervisor ? "hypervisor" : "jit");
-            AddText(hash, Configuration.EnableInternetAccess ? "internet" : "offline");
-            AddText(hash, Configuration.SystemTimeOffset.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
-            AddText(hash, Configuration.TimeZone ?? string.Empty);
 
             foreach (EnabledDirtyHack hack in Configuration.Hacks.OrderBy(h => h.ToString(), StringComparer.Ordinal))
             {
                 AddText(hash, $"hack:{hack}");
             }
 
-            try
+            if (!string.IsNullOrWhiteSpace(authoritativeSaveSha))
             {
-                HorizonClient client = System.LibHacHorizonManager.FsClient;
+                // During accepted SmashSync sessions, use the SHA-256 of the exact
+                // P1 archive that crossed the wire. Re-reading the live save
+                // container can include host/container bookkeeping unrelated to the
+                // canonical bytes P2 actually received.
+                AddText(hash, "authoritative-save");
+                AddText(hash, authoritativeSaveSha.Trim().ToLowerInvariant());
+            }
+            else
+            {
+                try
+                {
+                    HorizonClient client = System.LibHacHorizonManager.FsClient;
                 var accountUserId = System.AccountManager.LastOpenedUser.UserId;
                 LibHac.Fs.UserId userId = new((ulong)accountUserId.High, (ulong)accountUserId.Low);
 
@@ -575,15 +581,42 @@ namespace Ryujinx.HLE
                         }
                     }
                 }
-            }
-            catch (Exception ex)
-            {
-                Logger.Warning?.Print(LogClass.Application, $"SmashSync: could not fingerprint active save data: {ex.Message}");
-                AddText(hash, "save-fingerprint-error");
+                }
+                catch (Exception ex)
+                {
+                    Logger.Warning?.Print(LogClass.Application, $"SmashSync: could not fingerprint active save data: {ex.Message}");
+                    AddText(hash, "save-fingerprint-error");
+                }
             }
 
             byte[] digest = hash.GetHashAndReset();
             return BitConverter.ToUInt64(digest, 0);
+        }
+
+        public string GetActiveApplicationStateFingerprintSummary(string authoritativeSaveSha = null)
+        {
+            ulong programId = Processes.ActiveApplication?.ProgramId ?? 0UL;
+            string version = Processes.ActiveApplication?.DisplayVersion ?? string.Empty;
+            string firmware = System.ContentManager.GetCurrentFirmwareVersion()?.VersionString ?? "no-firmware";
+            string save = string.IsNullOrWhiteSpace(authoritativeSaveSha)
+                ? "live-save"
+                : authoritativeSaveSha.Length > 16
+                    ? authoritativeSaveSha[..16]
+                    : authoritativeSaveSha;
+
+            string hacks = string.Join(",", Configuration.Hacks
+                .OrderBy(h => h.ToString(), StringComparer.Ordinal)
+                .Select(h => h.ToString()));
+
+            return $"title={programId:x16} version={version} firmware={firmware} " +
+                $"language={Configuration.SystemLanguage} region={Configuration.Region} " +
+                $"mode={(Configuration.EnableDockedMode ? "docked" : "handheld")} " +
+                $"memory={Configuration.MemoryConfiguration} tickScalar={TickScalar} " +
+                $"hacks=[{hacks}] canonicalSave={save} " +
+                $"hostMemoryManager={Configuration.MemoryManagerMode} " +
+                $"hostCpu={(Configuration.UseHypervisor ? "hypervisor" : "jit")} " +
+                $"internet={(Configuration.EnableInternetAccess ? "on" : "off")} " +
+                $"timezone={Configuration.TimeZone}";
         }
 
         public void SetVolume(float volume) => AudioDeviceDriver.Volume = Math.Clamp(volume, 0f, 1f);
