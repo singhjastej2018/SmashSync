@@ -27,13 +27,12 @@ jobs:
       - name: Build required Ryujinx.LibHac package
         shell: pwsh
         run: |
-          git clone --depth 1 https://gitlab.com/ryujinx-classic/LibHac.git vendor/LibHac
-          $project = Get-ChildItem vendor/LibHac -Filter *.csproj -Recurse |
-            Where-Object { $_.Name -eq 'LibHac.csproj' } |
-            Select-Object -First 1
-          if (-not $project) { throw 'LibHac.csproj was not found in the mirror.' }
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/drukoz/Zyujinx.git vendor/Zyujinx
+          git -C vendor/Zyujinx sparse-checkout set LibHac-Decompiled
+          $project = "vendor/Zyujinx/LibHac-Decompiled/LibHac.csproj"
+          if (-not (Test-Path $project)) { throw 'LibHac.csproj was not found in the compatibility mirror.' }
           New-Item -ItemType Directory -Force vendor-packages | Out-Null
-          dotnet pack $project.FullName -c Release -o vendor-packages -p:PackageId=Ryujinx.LibHac -p:PackageVersion=0.21.0-alpha.133
+          dotnet pack $project -c Release -o vendor-packages -p:PackageId=Ryujinx.LibHac -p:PackageVersion=0.21.0-alpha.133
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Restore Windows x64
