@@ -181,3 +181,10 @@ The guest tick source is instance-local and internally synchronized so concurren
 ## Runtime pacing diagnostics
 
 Every 60 logical ticks, netplay logging includes the negotiated delay, measured RTT, effective logical tick rate, number of lockstep stalls, and cumulative stall milliseconds. A healthy 60 Hz session should converge near `effectiveHz=60` with stall time remaining close to zero. If network latency or jitter exceeds the startup buffer, SmashSync still pauses rather than advancing either peer on a different input stream.
+
+
+## Canonical HID timeline
+
+For synchronized netplay, P1 and P2 controller ring-buffer sampling numbers are derived from the shared SmashSync logical tick rather than each machine's pre-existing local HID history. The P1/P2 button-stick and six-axis ring histories are cleared while the application is paused at the startup barrier, then rebuilt from the same shared sample numbers on both peers.
+
+Every 60 logical ticks, both peers also exchange the cumulative canonical P1+P2 input digest. A mismatch stops the session with `INPUT STREAM MISMATCH` instead of allowing different controller streams to silently drive the two guests apart. This verifies the complete input stream; it still does not by itself prove that all internal SSBU runtime state is identical.
