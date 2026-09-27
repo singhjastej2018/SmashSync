@@ -225,9 +225,11 @@ namespace Ryujinx.Input.HLE.SmashSync
 
             try
             {
-                _localStateFingerprint = device.GetActiveApplicationStateFingerprint();
+                string authoritativeSaveSha = SmashSyncLobbyService.AuthoritativeSaveSha;
+                _localStateFingerprint = device.GetActiveApplicationStateFingerprint(authoritativeSaveSha);
                 _stateFingerprintReady = true;
                 Log($"local start-state fingerprint=0x{_localStateFingerprint:x16}");
+                Log($"start-state components: {device.GetActiveApplicationStateFingerprintSummary(authoritativeSaveSha)}");
             }
             catch (Exception ex)
             {
