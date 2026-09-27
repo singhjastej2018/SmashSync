@@ -395,10 +395,11 @@ namespace Ryujinx.Input.HLE.SmashSync
             _lastP2 = p2;
             _haveLastCombined = true;
 
+            UpdateDigest(p1, p2);
             if ((_tick % 60) == 0)
             {
                 SendPing();
-                HashAndLog(p1, p2, $"netplay rttMs={_lastRttMs:F2}");
+                LogDigest($"netplay rttMs={_lastRttMs:F2}");
                 Trim();
             }
 
@@ -419,10 +420,11 @@ namespace Ryujinx.Input.HLE.SmashSync
 
             _record.WriteLine(JsonSerializer.Serialize(frame));
 
+            UpdateDigest(p1, p2);
             if ((_tick % 60) == 0)
             {
                 _record.Flush();
-                HashAndLog(p1, p2, "record");
+                LogDigest("record");
             }
         }
 
@@ -443,9 +445,10 @@ namespace Ryujinx.Input.HLE.SmashSync
             _lastP2 = p2;
             _haveLastCombined = true;
 
+            UpdateDigest(p1, p2);
             if ((_tick % 60) == 0)
             {
-                HashAndLog(p1, p2, "replay");
+                LogDigest("replay");
             }
         }
 
@@ -733,11 +736,15 @@ namespace Ryujinx.Input.HLE.SmashSync
             states.Add(new SixAxisInput { PlayerId = PlayerIndex.Player2, Orientation = new float[9] });
         }
 
-        private void HashAndLog(GamepadInput p1, GamepadInput p2, string context)
+        private void UpdateDigest(GamepadInput p1, GamepadInput p2)
         {
             Hash(_tick);
             HashInput(p1);
             HashInput(p2);
+        }
+
+        private void LogDigest(string context)
+        {
             Log($"tick={_tick} inputDigest=0x{_digest:X16} {context}");
         }
 
