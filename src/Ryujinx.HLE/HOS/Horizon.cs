@@ -547,39 +547,56 @@ namespace Ryujinx.HLE.HOS
         {
             lock (KernelContext.Processes)
             {
-                if (pause)
+                if (pause && !IsPaused)
                 {
-                    if (!IsPaused)
+                    bool committed = false;
+
+                    foreach (KProcess process in KernelContext.Processes.Values)
                     {
-                        // Stop application execution first, then freeze guest time at
-                        // the point the application became inactive.
-                        foreach (KProcess process in KernelContext.Processes.Values)
+                        if (!process.IsApplication)
                         {
-                            if (process.IsApplication)
-                            {
-                                process.SetActivity(true);
-                            }
+                            continue;
                         }
 
+                        process.SetActivity(true, committed ? null : () =>
+                        {
+                            Device.AudioDeviceDriver.GetPauseEvent().Reset();
+                            TickSource.Suspend();
+                        });
+
+                        committed = true;
+                    }
+
+                    if (!committed)
+                    {
                         Device.AudioDeviceDriver.GetPauseEvent().Reset();
                         TickSource.Suspend();
                     }
                 }
-                else if (IsPaused)
+                else if (!pause && IsPaused)
                 {
-                    // Resume guest time before making any application thread runnable.
-                    // SmashSync depends on this ordering: every resumed SSBU thread
-                    // must observe a guest counter that was started at the shared epoch,
-                    // never a briefly-stopped counter whose wake-up race differs by PC.
-                    TickSource.Resume();
-                    Device.AudioDeviceDriver.GetPauseEvent().Set();
+                    bool committed = false;
 
                     foreach (KProcess process in KernelContext.Processes.Values)
                     {
-                        if (process.IsApplication)
+                        if (!process.IsApplication)
                         {
-                            process.SetActivity(false);
+                            continue;
                         }
+
+                        process.SetActivity(false, committed ? null : () =>
+                        {
+                            TickSource.Resume();
+                            Device.AudioDeviceDriver.GetPauseEvent().Set();
+                        });
+
+                        committed = true;
+                    }
+
+                    if (!committed)
+                    {
+                        TickSource.Resume();
+                        Device.AudioDeviceDriver.GetPauseEvent().Set();
                     }
                 }
             }
