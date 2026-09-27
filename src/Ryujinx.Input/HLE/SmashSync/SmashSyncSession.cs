@@ -109,6 +109,9 @@ namespace Ryujinx.Input.HLE.SmashSync
         public bool ResumeRequested => _resumeRequested;
         public bool OwnsPause => _ownsPause;
         public ulong SharedTick => _tick;
+        public bool CanonicalRouting => _mode == SmashSyncMode.Netplay && SmashSyncLobbyService.IsConnected;
+        public PlayerIndex CanonicalLocalPlayer => (PlayerIndex)LocalPlayerIndex;
+        public PlayerIndex CanonicalRemotePlayer => (PlayerIndex)RemotePlayerIndex;
 
         private int LocalPlayerIndex => _config.LocalPlayer - 1;
         private int PhysicalPlayerIndex =>
