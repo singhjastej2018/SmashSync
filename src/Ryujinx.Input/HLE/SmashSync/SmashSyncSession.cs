@@ -263,6 +263,15 @@ namespace Ryujinx.Input.HLE.SmashSync
                 return;
             }
 
+            // Accepted pre-game sessions wait for the slower peer rather than using
+            // an arbitrary loading deadline. A real lobby disconnect is the failure
+            // condition, so shader/JIT/load-time differences cannot abort startup.
+            if (_lobbyToken != 0 && !SmashSyncLobbyService.IsConnected)
+            {
+                FailSession("pre-game lobby disconnected; keeping guest paused");
+                return;
+            }
+
             long now = Environment.TickCount64;
 
             if (!_peerHello && now - _lastHelloSendMs >= 250)
@@ -273,12 +282,6 @@ namespace Ryujinx.Input.HLE.SmashSync
 
             if (_state == RunState.ReadyBarrier)
             {
-                if (_barrierEnteredMs != 0 && now - _barrierEnteredMs > _config.HandshakeTimeoutMs)
-                {
-                    FailSession($"startup barrier timed out after {_config.HandshakeTimeoutMs} ms; keeping guest paused");
-                    return;
-                }
-
                 if (now - _lastReadySendMs >= 100)
                 {
                     SendControl(PacketType.Ready, _lobbyToken, 0);
