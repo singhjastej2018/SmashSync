@@ -51,7 +51,7 @@ Player 1:
   "LocalPort": 27888,
   "PeerPort": 27888,
   "SyncHz": 60,
-  "InputDelayTicks": 2,
+  "InputDelayTicks": 1,
   "Redundancy": 3,
   "RequireReadyChord": false,
   "ConfigureTwoPlayers": true
@@ -69,7 +69,7 @@ Player 2:
   "LocalPort": 27888,
   "PeerPort": 27888,
   "SyncHz": 60,
-  "InputDelayTicks": 2,
+  "InputDelayTicks": 1,
   "Redundancy": 3,
   "RequireReadyChord": false,
   "ConfigureTwoPlayers": true
@@ -119,7 +119,7 @@ The shared logical input tick runs at 60 Hz by default. Each input packet carrie
 
 Before consuming a tick that requires remote input, SmashSync checks whether that exact remote tick has arrived. If not, it pauses before the HID update while networking remains active, then resumes when the missing input arrives.
 
-This is buffered lockstep, not rollback.
+This is buffered lockstep, not rollback. The recommended low-latency baseline is one input-delay tick (~16.7 ms at 60 Hz); zero-tick mode is allowed but can stall every frame when network one-way delay exceeds the current frame budget.
 
 ## Current limitation
 
@@ -140,3 +140,12 @@ For initial testing, keep these identical on both machines:
 - mods/cheats disabled unless intentionally identical.
 
 Equivalent save data is useful for eliminating differences in unlocks, rulesets, and settings. Shader caches do not need to match.
+
+
+## Canonical input routing
+
+During an accepted SmashSync session, only the canonical local player's physical Ryujinx controller is sampled as local gameplay input. The opposite canonical player slot is supplied exclusively by the UDP network stream. The visible `SmashSync Remote P1/P2` device remains available for identification/configuration UI, but it is not polled again by the gameplay path. This prevents remote input from being selected as a local source and echoed back to the peer.
+
+## Synchronized release
+
+For accepted pre-game sessions, the application main thread is suspended with the emulator's normal process-pause flag before guest execution begins. Both peers remain suspended through READY/START. SmashSync measures UDP RTT while paused, then P1 sends a RELEASE barrier with a future lead time. P2 compensates approximately half its measured RTT before scheduling its resume, reducing the one-way START/ACK head-start that previously allowed one guest to begin several milliseconds before the other.
