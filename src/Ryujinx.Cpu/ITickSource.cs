@@ -31,6 +31,12 @@ namespace Ryujinx.Cpu
         void Suspend();
 
         /// <summary>
+        /// Resets elapsed guest time to zero while preserving the current
+        /// running/stopped state.
+        /// </summary>
+        void Reset();
+
+        /// <summary>
         /// Resumes counting after a call to <see cref="Suspend"/>.
         /// </summary>
         void Resume();
