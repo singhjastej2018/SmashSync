@@ -934,8 +934,48 @@ namespace Ryujinx.Ava.Systems
 
             if (smashSyncStartPaused)
             {
+                string smashSyncTitleId = Device.Processes.ActiveApplication.ProgramIdText;
+
+                try
+                {
+                    if (SmashSyncLobbyService.LocalPlayer == 1)
+                    {
+                        byte[] authoritativeSave = Device.CreateActiveApplicationSaveArchive();
+                        await Task.Run(() => SmashSyncLobbyService.SendAuthoritativeSave(smashSyncTitleId, authoritativeSave));
+                        Logger.Info?.PrintMsg(LogClass.Application, $"SmashSync: sent P1 authoritative save for {smashSyncTitleId}");
+                    }
+                    else
+                    {
+                        byte[] authoritativeSave = await Task.Run(() =>
+                        {
+                            return SmashSyncLobbyService.WaitForAuthoritativeSave(
+                                smashSyncTitleId,
+                                SmashSyncLobbyService.HandshakeTimeoutMs,
+                                out byte[] snapshot)
+                                ? snapshot
+                                : null;
+                        });
+
+                        if (authoritativeSave == null)
+                        {
+                            throw new TimeoutException($"Timed out waiting for P1 authoritative save for {smashSyncTitleId}.");
+                        }
+
+                        Device.ApplySmashSyncAuthoritativeSave(authoritativeSave);
+                        Logger.Info?.PrintMsg(LogClass.Application, $"SmashSync: applied temporary P1 authoritative save for {smashSyncTitleId}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error?.PrintMsg(LogClass.Application, $"SmashSync authoritative save synchronization failed: {ex}");
+                    SmashSyncLobbyService.Disconnect();
+                    Device.Dispose();
+                    cts.Cancel();
+                    throw new OperationCanceledException("SmashSync authoritative save synchronization failed.", ex, cts.Token);
+                }
+
                 Device.DisarmApplicationStartPause();
-                Logger.Info?.PrintMsg(LogClass.Application, "SmashSync: guest process loaded while paused; waiting for peer start barrier");
+                Logger.Info?.PrintMsg(LogClass.Application, "SmashSync: guest process loaded with P1 authoritative state while paused; waiting for shared epoch");
             }
 
             ApplicationLibrary.LoadAndSaveMetaData(Device.Processes.ActiveApplication.ProgramIdText,
