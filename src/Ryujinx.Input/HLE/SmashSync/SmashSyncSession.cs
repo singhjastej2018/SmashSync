@@ -288,27 +288,44 @@ namespace Ryujinx.Input.HLE.SmashSync
                     return;
                 }
 
-                // Measure RTT while both guest processes are still frozen. This is
-                // used only to align the one-time release barrier, never as gameplay
-                // authority.
-                if (now - _lastBarrierPingMs >= 50 && _sessionId == 0)
-                {
-                    SendPing();
-                    _lastBarrierPingMs = now;
-                }
-
                 if (_peerReady && _stateFingerprintReady && _stateFingerprintReceived)
                 {
                     if (LocalPlayerIndex == 0)
                     {
-                        // Give the RTT probe a short opportunity to complete before
-                        // assigning the gameplay session. Do not let missing ping
-                        // diagnostics block startup indefinitely.
-                        if (_sessionId == 0 && (_lastRttMs > 0 || now - _barrierEnteredMs >= 250))
+                        if (_clockSyncStartedMs == 0)
+                        {
+                            _clockSyncStartedMs = now;
+                            Log("starting P1-authoritative monotonic clock synchronization");
+                        }
+
+                        if (now - _lastClockSyncSendMs >= ClockSyncIntervalMs)
+                        {
+                            long t1Ns = MonotonicNowNs();
+                            SendControl(PacketType.ClockSyncRequest, t1Ns, 0);
+                            _lastClockSyncSendMs = now;
+                        }
+
+                        int samples;
+                        long bestRttNs;
+                        long offsetNs;
+                        lock (_clockLock)
+                        {
+                            samples = _clockSamples;
+                            bestRttNs = _clockBestRttNs;
+                            offsetNs = _clockOffsetNs;
+                        }
+
+                        bool clockReady =
+                            samples >= ClockSyncMinSamples ||
+                            (samples > 0 && now - _clockSyncStartedMs >= ClockSyncMaxWaitMs);
+
+                        if (_sessionId == 0 && clockReady)
                         {
                             _sessionId = DateTime.UtcNow.Ticks ^ Stopwatch.GetTimestamp() ^ Environment.ProcessId;
                             if (_sessionId == 0) _sessionId = 1;
-                            Log($"peer READY; leader created session={_sessionId} barrierRttMs={_lastRttMs:F2}");
+
+                            double bestRttMs = bestRttNs == long.MaxValue ? 0 : bestRttNs / 1_000_000.0;
+                            Log($"shared clock locked samples={samples} bestRttMs={bestRttMs:F3} p2MinusP1Ms={offsetNs / 1_000_000.0:F3}; session={_sessionId}");
                         }
 
                         if (_sessionId != 0 && !_startAckReceived && now - _lastStartSendMs >= 50)
@@ -319,20 +336,31 @@ namespace Ryujinx.Input.HLE.SmashSync
 
                         if (_startAckReceived)
                         {
-                            if (_resumeTargetStamp == 0)
+                            if (_sharedEpochP1Ns == 0)
                             {
-                                _resumeTargetStamp = Stopwatch.GetTimestamp() + MillisecondsToStopwatchTicks(ReleaseLeadMs);
-                                SendControl(PacketType.Release, _sessionId, 0);
-                                _lastReleaseSendMs = now;
-                                Log($"sent RELEASE session={_sessionId} leadMs={ReleaseLeadMs}");
+                                lock (_clockLock)
+                                {
+                                    offsetNs = _clockOffsetNs;
+                                }
+
+                                _sharedEpochP1Ns = MonotonicNowNs() + EpochLeadMs * 1_000_000L;
+                                _localEpochNs = _sharedEpochP1Ns;
+                                SendEpoch(_sharedEpochP1Ns, offsetNs);
+                                _lastEpochSendMs = now;
+                                Log($"scheduled shared epoch p1Ns={_sharedEpochP1Ns} leadMs={EpochLeadMs} p2MinusP1Ms={offsetNs / 1_000_000.0:F3}");
                             }
-                            else if (!_releaseAckReceived && now - _lastReleaseSendMs >= 20)
+                            else if (!_epochAckReceived && now - _lastEpochSendMs >= 20)
                             {
-                                SendControl(PacketType.Release, _sessionId, 0);
-                                _lastReleaseSendMs = now;
+                                lock (_clockLock)
+                                {
+                                    offsetNs = _clockOffsetNs;
+                                }
+
+                                SendEpoch(_sharedEpochP1Ns, offsetNs);
+                                _lastEpochSendMs = now;
                             }
 
-                            if (_releaseAckReceived && Stopwatch.GetTimestamp() >= _resumeTargetStamp)
+                            if (_epochAckReceived)
                             {
                                 RequestResumeFromBarrier();
                             }
@@ -346,7 +374,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                             _lastStartSendMs = now;
                         }
 
-                        if (_releaseReceived && _resumeTargetStamp != 0 && Stopwatch.GetTimestamp() >= _resumeTargetStamp)
+                        if (_epochReceived)
                         {
                             RequestResumeFromBarrier();
                         }
