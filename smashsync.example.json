@@ -6,7 +6,7 @@
   "LocalPort": 27888,
   "PeerPort": 27888,
   "SyncHz": 60,
-  "InputDelayTicks": 2,
+  "InputDelayTicks": 1,
   "LockstepTimeoutMs": 5000,
   "HandshakeTimeoutMs": 30000,
   "Redundancy": 3,
