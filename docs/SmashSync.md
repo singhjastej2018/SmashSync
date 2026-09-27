@@ -2,7 +2,7 @@
 
 SmashSync is opt-in. Without a `smashsync.json` file in the SmashSync data directory, input behaves like normal Ryujinx.
 
-The v0 protocol uses a **shared logical input tick**. Local Ryujinx counters and wall-clock timestamps are not gameplay authority. Timestamps are used only for RTT diagnostics.
+The v0 protocol uses a **shared logical input tick** at a configured rate (60 Hz by default). Local Ryujinx poll counters and wall-clock timestamps are not gameplay authority. Timestamps are used only for pacing and RTT diagnostics.
 
 ## Windows x64 first
 
@@ -100,4 +100,4 @@ Ping/pong timestamps are diagnostics only.
 
 ## Current limitation
 
-The v0 shared tick is tied to Ryujinx's host HID/input update loop, not yet a verified SSBU internal simulation-frame counter. Matching input digests prove both instances consumed the same controller stream; they do not by themselves prove whole-game determinism. State hashing is the next milestone before rollback.
+The v0 shared tick is paced independently at 60 Hz and applied through Ryujinx HID; it is not yet a verified SSBU internal simulation-frame counter. Matching input digests prove both instances consumed the same controller stream; they do not by themselves prove whole-game determinism. State hashing is the next milestone before rollback.
