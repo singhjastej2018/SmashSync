@@ -20,8 +20,9 @@ namespace Ryujinx.Input.HLE.SmashSync
         private const int HeaderSize = 32;
         private const int RecordSize = 32;
         private const int MaxRedundancy = 3;
+        private const int ReleaseLeadMs = 120;
 
-        private enum PacketType : byte { Hello = 1, Ready = 2, Start = 3, StartAck = 4, Input = 5, Ping = 6, Pong = 7 }
+        private enum PacketType : byte { Hello = 1, Ready = 2, Start = 3, StartAck = 4, Input = 5, Ping = 6, Pong = 7, Release = 8, ReleaseAck = 9 }
         private enum RunState { WaitingForReady, PausingForReady, ReadyBarrier, WaitingForResume, Running, Failed }
 
         private sealed class ReplayInput
@@ -76,6 +77,8 @@ namespace Ryujinx.Input.HLE.SmashSync
         private volatile bool _peerReady;
         private volatile bool _startReceived;
         private volatile bool _startAckReceived;
+        private volatile bool _releaseReceived;
+        private volatile bool _releaseAckReceived;
 
         private RunState _state;
         private bool _pauseRequested;
@@ -92,6 +95,10 @@ namespace Ryujinx.Input.HLE.SmashSync
         private long _lastHelloSendMs;
         private long _lastReadySendMs;
         private long _lastStartSendMs;
+        private long _lastReleaseSendMs;
+        private long _lastBarrierPingMs;
+        private long _barrierEnteredMs;
+        private long _resumeTargetStamp;
         private long _lastRetransmitMs;
         private readonly long _tickInterval;
         private long _nextTickStamp;
@@ -201,34 +208,68 @@ namespace Ryujinx.Input.HLE.SmashSync
                     _lastReadySendMs = now;
                 }
 
+                // Measure RTT while both guest processes are still frozen. This is
+                // used only to align the one-time release barrier, never as gameplay
+                // authority.
+                if (now - _lastBarrierPingMs >= 50 && _sessionId == 0)
+                {
+                    SendPing();
+                    _lastBarrierPingMs = now;
+                }
+
                 if (_peerReady)
                 {
                     if (LocalPlayerIndex == 0)
                     {
-                        if (_sessionId == 0)
+                        // Give the RTT probe a short opportunity to complete before
+                        // assigning the gameplay session. Do not let missing ping
+                        // diagnostics block startup indefinitely.
+                        if (_sessionId == 0 && (_lastRttMs > 0 || now - _barrierEnteredMs >= 250))
                         {
                             _sessionId = DateTime.UtcNow.Ticks ^ Stopwatch.GetTimestamp() ^ Environment.ProcessId;
                             if (_sessionId == 0) _sessionId = 1;
-                            Log($"peer READY; leader created session={_sessionId}");
+                            Log($"peer READY; leader created session={_sessionId} barrierRttMs={_lastRttMs:F2}");
                         }
 
-                        if (!_startAckReceived && now - _lastStartSendMs >= 100)
+                        if (_sessionId != 0 && !_startAckReceived && now - _lastStartSendMs >= 50)
                         {
                             SendControl(PacketType.Start, _sessionId, 0);
                             _lastStartSendMs = now;
-                            Log($"sent START session={_sessionId}");
                         }
 
                         if (_startAckReceived)
                         {
-                            RequestResumeFromBarrier();
+                            if (_resumeTargetStamp == 0)
+                            {
+                                _resumeTargetStamp = Stopwatch.GetTimestamp() + MillisecondsToStopwatchTicks(ReleaseLeadMs);
+                                SendControl(PacketType.Release, _sessionId, 0);
+                                _lastReleaseSendMs = now;
+                                Log($"sent RELEASE session={_sessionId} leadMs={ReleaseLeadMs}");
+                            }
+                            else if (!_releaseAckReceived && now - _lastReleaseSendMs >= 20)
+                            {
+                                SendControl(PacketType.Release, _sessionId, 0);
+                                _lastReleaseSendMs = now;
+                            }
+
+                            if (_releaseAckReceived && Stopwatch.GetTimestamp() >= _resumeTargetStamp)
+                            {
+                                RequestResumeFromBarrier();
+                            }
                         }
                     }
                     else if (_startReceived)
                     {
-                        SendControl(PacketType.StartAck, _sessionId, 0);
-                        Log($"sent START_ACK session={_sessionId}");
-                        RequestResumeFromBarrier();
+                        if (now - _lastStartSendMs >= 50)
+                        {
+                            SendControl(PacketType.StartAck, _sessionId, 0);
+                            _lastStartSendMs = now;
+                        }
+
+                        if (_releaseReceived && _resumeTargetStamp != 0 && Stopwatch.GetTimestamp() >= _resumeTargetStamp)
+                        {
+                            RequestResumeFromBarrier();
+                        }
                     }
                 }
             }
@@ -247,7 +288,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     // If both sides paused because the same UDP input was lost,
                     // there may be no newer packet to carry a redundant copy.
                     // Retransmit this exact logical tick while the barrier is held.
-                    if (now - _lastRetransmitMs >= 8 && _localHistory.ContainsKey(_tick))
+                    if (now - _lastRetransmitMs >= 4 && _localHistory.ContainsKey(_tick))
                     {
                         SendInputs(_tick);
                         _lastRetransmitMs = now;
@@ -277,9 +318,15 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _peerReady = false;
                 _startReceived = false;
                 _startAckReceived = false;
+                _releaseReceived = false;
+                _releaseAckReceived = false;
                 _sessionId = 0;
                 _lastReadySendMs = 0;
                 _lastStartSendMs = 0;
+                _lastReleaseSendMs = 0;
+                _lastBarrierPingMs = 0;
+                _barrierEnteredMs = Environment.TickCount64;
+                _resumeTargetStamp = 0;
                 _tick = 0;
                 _nextTickStamp = Stopwatch.GetTimestamp();
                 _lastP1 = Neutral(PlayerIndex.Player1);
@@ -487,6 +534,9 @@ namespace Ryujinx.Input.HLE.SmashSync
             }
         }
 
+        private static long MillisecondsToStopwatchTicks(double milliseconds) =>
+            (long)(milliseconds * Stopwatch.Frequency / 1000.0);
+
         private bool IsTickDue() => Stopwatch.GetTimestamp() >= _nextTickStamp;
 
         private void AdvanceTick()
@@ -570,7 +620,6 @@ namespace Ryujinx.Input.HLE.SmashSync
                                 _sessionId = session;
                                 if (!_startReceived) Log($"received START session={session}");
                                 _startReceived = true;
-                                SendControl(PacketType.StartAck, session, 0);
                             }
                             break;
                         case PacketType.StartAck:
@@ -578,6 +627,28 @@ namespace Ryujinx.Input.HLE.SmashSync
                             {
                                 if (!_startAckReceived) Log($"received START_ACK session={session}");
                                 _startAckReceived = true;
+                            }
+                            break;
+                        case PacketType.Release:
+                            if (LocalPlayerIndex == 1 && session == _sessionId)
+                            {
+                                if (!_releaseReceived)
+                                {
+                                    double oneWayMs = Math.Clamp(_lastRttMs * 0.5, 0.0, ReleaseLeadMs - 20.0);
+                                    double remainingMs = Math.Max(20.0, ReleaseLeadMs - oneWayMs);
+                                    _resumeTargetStamp = Stopwatch.GetTimestamp() + MillisecondsToStopwatchTicks(remainingMs);
+                                    _releaseReceived = true;
+                                    Log($"received RELEASE session={session} rttMs={_lastRttMs:F2} resumeInMs={remainingMs:F2}");
+                                }
+
+                                SendControl(PacketType.ReleaseAck, session, 0);
+                            }
+                            break;
+                        case PacketType.ReleaseAck:
+                            if (LocalPlayerIndex == 0 && session == _sessionId)
+                            {
+                                if (!_releaseAckReceived) Log($"received RELEASE_ACK session={session}");
+                                _releaseAckReceived = true;
                             }
                             break;
                         case PacketType.Input:
