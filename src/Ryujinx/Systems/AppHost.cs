@@ -1216,7 +1216,28 @@ namespace Ryujinx.Ava.Systems
                 return false;
             }
 
-            NpadManager.Update(ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat());
+            NpadManager.PumpSmashSyncControl();
+
+            if (NpadManager.SmashSyncPauseRequested && !Device.System.IsPaused)
+            {
+                Pause();
+                NpadManager.NotifySmashSyncPaused();
+            }
+
+            if (NpadManager.SmashSyncResumeRequested && NpadManager.SmashSyncOwnsPause && Device.System.IsPaused)
+            {
+                Resume();
+                NpadManager.NotifySmashSyncResumed();
+            }
+
+            if (Device.System.IsPaused && NpadManager.SmashSyncOwnsPause)
+            {
+                return true;
+            }
+
+            NpadManager.Update(
+                ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat(),
+                !Device.System.IsPaused);
 
             if (_viewModel.IsActive)
             {
