@@ -515,6 +515,12 @@ namespace Ryujinx.HLE
             if (disposing)
             {
                 Processes.ClearAllProcesses();
+
+                // P2 uses P1's save only for the lifetime of the SmashSync session.
+                // Restore P2's local save after all guest processes and save handles
+                // have been torn down, before the filesystem itself is disposed.
+                RestoreSmashSyncAuthoritativeSave();
+
                 System.Dispose();
                 AudioDeviceDriver.Dispose();
                 FileSystem.Dispose();
