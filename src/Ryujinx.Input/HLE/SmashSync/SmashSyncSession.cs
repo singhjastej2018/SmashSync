@@ -17,16 +17,18 @@ namespace Ryujinx.Input.HLE.SmashSync
     internal sealed class SmashSyncSession : IDisposable
     {
         private const uint Magic = 0x504E5353; // SSNP
-        private const byte Version = 4;
+        private const byte Version = 5;
         private const int HeaderSize = 32;
         private const int RecordSize = 32;
         private const int MaxRedundancy = 3;
-        private const int ClockSyncMinSamples = 6;
-        private const int ClockSyncMaxWaitMs = 750;
+        private const int ClockSyncMinSamples = 12;
+        private const int ClockSyncMaxWaitMs = 1000;
         private const int ClockSyncIntervalMs = 20;
         private const int EpochLeadMs = 500;
         private const ulong MaxRemoteTickLead = 512;
         private const int ReleaseMinLeadMs = 10;
+        private const int MaxAdaptiveInputDelayTicks = 6;
+        private const long InputDelaySafetyNs = 2_000_000L;
         private const int ClockSyncPacketSize = HeaderSize + 8;
         private const int EpochPacketSize = HeaderSize + 8;
 
@@ -88,6 +90,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private readonly object _sendLock = new();
         private readonly object _clockLock = new();
         private readonly HashSet<long> _pendingClockSyncRequests = [];
+        private readonly List<long> _clockRttSamplesNs = [];
         private readonly Dictionary<ulong, GamepadInput> _localHistory = [];
         private readonly Dictionary<ulong, GamepadInput> _remoteHistory = [];
         private readonly Dictionary<ulong, ReplayFrame> _replay = [];
@@ -134,6 +137,8 @@ namespace Ryujinx.Input.HLE.SmashSync
         private long _clockBestRttNs = long.MaxValue;
         private long _clockOffsetNs;
         private int _clockSamples;
+        private int _effectiveInputDelayTicks;
+        private long _resumeDispatchNs;
         private long _sharedEpochP1Ns;
         private long _localEpochNs;
         private long _lastStateFingerprintSendMs;
@@ -174,6 +179,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             _mode = config.ParsedMode;
             _tickInterval = Math.Max(1, Stopwatch.Frequency / _config.SyncHz);
             _tickIntervalNs = Math.Max(1, 1_000_000_000L / _config.SyncHz);
+            _effectiveInputDelayTicks = _config.InputDelayTicks;
             _nextTickStamp = Stopwatch.GetTimestamp();
             SmashSyncLobbyService.Initialize();
             _lobbyToken = SmashSyncLobbyService.ConnectionToken;
@@ -330,11 +336,13 @@ namespace Ryujinx.Input.HLE.SmashSync
 
                         int samples;
                         long bestRttNs;
+                        long p90RttNs;
                         long offsetNs;
                         lock (_clockLock)
                         {
                             samples = _clockSamples;
                             bestRttNs = _clockBestRttNs;
+                            p90RttNs = GetPercentileRttNsLocked(0.90);
                             offsetNs = _clockOffsetNs;
                         }
 
@@ -344,15 +352,18 @@ namespace Ryujinx.Input.HLE.SmashSync
 
                         if (_sessionId == 0 && clockReady)
                         {
+                            _effectiveInputDelayTicks = SelectInputDelayTicks(p90RttNs);
                             _sessionId = CreateSessionId();
 
                             double bestRttMs = bestRttNs == long.MaxValue ? 0 : bestRttNs / 1_000_000.0;
-                            Log($"shared clock locked samples={samples} bestRttMs={bestRttMs:F3} p2MinusP1Ms={offsetNs / 1_000_000.0:F3}; session={_sessionId}");
+                            double p90RttMs = p90RttNs == long.MaxValue ? 0 : p90RttNs / 1_000_000.0;
+                            Log($"shared clock locked samples={samples} bestRttMs={bestRttMs:F3} p90RttMs={p90RttMs:F3} p2MinusP1Ms={offsetNs / 1_000_000.0:F3}; session={_sessionId}");
+                            Log($"input delay selected={_effectiveInputDelayTicks} ticks configuredMinimum={_config.InputDelayTicks} tickMs={_tickIntervalNs / 1_000_000.0:F3}");
                         }
 
                         if (_sessionId != 0 && !_startAckReceived && now - _lastStartSendMs >= 50)
                         {
-                            SendControl(PacketType.Start, _sessionId, _lobbyToken);
+                            SendControl(PacketType.Start, _sessionId, _lobbyToken, (byte)_effectiveInputDelayTicks);
                             _lastStartSendMs = now;
                         }
 
@@ -401,7 +412,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     {
                         if (now - _lastStartSendMs >= 50)
                         {
-                            SendControl(PacketType.StartAck, _sessionId, _lobbyToken);
+                            SendControl(PacketType.StartAck, _sessionId, _lobbyToken, (byte)_effectiveInputDelayTicks);
                             _lastStartSendMs = now;
                         }
 
@@ -412,7 +423,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     }
                 }
             }
-            else if (_state == RunState.Running && IsTickDue() && _tick >= (ulong)_config.InputDelayTicks)
+            else if (_state == RunState.Running && IsTickDue() && _tick >= (ulong)_effectiveInputDelayTicks)
             {
                 // Never stall before the local input for this logical tick has been
                 // captured and transmitted. This is required for zero-delay mode:
@@ -504,6 +515,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     _clockSamples = 0;
                     _clockBestRttNs = long.MaxValue;
                     _clockOffsetNs = 0;
+                    _clockRttSamplesNs.Clear();
                     _pendingClockSyncRequests.Clear();
                 }
                 _tick = 0;
@@ -564,11 +576,15 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _localHistory.Clear();
                 lock (_remoteLock) _remoteHistory.Clear();
 
-                double epochErrorMs = _localEpochNs > 0
-                    ? (MonotonicNowNs() - _localEpochNs) / 1_000_000.0
+                long resumedNs = MonotonicNowNs();
+                double dispatchErrorMs = _localEpochNs > 0 && _resumeDispatchNs > 0
+                    ? (_resumeDispatchNs - _localEpochNs) / 1_000_000.0
+                    : 0;
+                double resumeCallMs = _resumeDispatchNs > 0
+                    ? (resumedNs - _resumeDispatchNs) / 1_000_000.0
                     : 0;
 
-                Log($"shared tick 0 started session={_sessionId} epochErrorMs={epochErrorMs:F3}");
+                Log($"shared tick 0 started session={_sessionId} epochDispatchErrorMs={dispatchErrorMs:F3} resumeCallMs={resumeCallMs:F3} inputDelay={_effectiveInputDelayTicks}");
             }
         }
 
@@ -653,7 +669,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 return false;
             }
 
-            ulong targetTick = _tick + (ulong)_config.InputDelayTicks;
+            ulong targetTick = _tick + (ulong)_effectiveInputDelayTicks;
             physicalLocal.PlayerId = localPlayer;
 
             // A logical input becomes immutable the first time it is assigned.
@@ -675,7 +691,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 : Neutral(localPlayer);
 
             GamepadInput remote;
-            if (_tick < (ulong)_config.InputDelayTicks)
+            if (_tick < (ulong)_effectiveInputDelayTicks)
             {
                 remote = Neutral((PlayerIndex)RemotePlayerIndex);
             }
@@ -888,15 +904,32 @@ namespace Ryujinx.Input.HLE.SmashSync
                         case PacketType.Start:
                             if (LocalPlayerIndex == 1 && session != 0 && stamp == _lobbyToken)
                             {
+                                int proposedDelay = Math.Clamp(count, 0, MaxAdaptiveInputDelayTicks);
+                                if (_startReceived && proposedDelay != _effectiveInputDelayTicks)
+                                {
+                                    FailSession($"conflicting START input delay {proposedDelay}; expected {_effectiveInputDelayTicks}");
+                                    break;
+                                }
+
                                 _sessionId = session;
-                                if (!_startReceived) Log($"received START session={session}");
+                                _effectiveInputDelayTicks = proposedDelay;
+                                if (!_startReceived)
+                                {
+                                    Log($"received START session={session} inputDelay={_effectiveInputDelayTicks}");
+                                }
                                 _startReceived = true;
                             }
                             break;
                         case PacketType.StartAck:
                             if (LocalPlayerIndex == 0 && session == _sessionId && stamp == _lobbyToken)
                             {
-                                if (!_startAckReceived) Log($"received START_ACK session={session}");
+                                if (count != _effectiveInputDelayTicks)
+                                {
+                                    FailSession($"START_ACK input delay mismatch peer={count} local={_effectiveInputDelayTicks}");
+                                    break;
+                                }
+
+                                if (!_startAckReceived) Log($"received START_ACK session={session} inputDelay={_effectiveInputDelayTicks}");
                                 _startAckReceived = true;
                             }
                             break;
@@ -936,6 +969,12 @@ namespace Ryujinx.Input.HLE.SmashSync
                                     lock (_clockLock)
                                     {
                                         _clockSamples++;
+                                        _clockRttSamplesNs.Add(rttNs);
+                                        if (_clockRttSamplesNs.Count > 64)
+                                        {
+                                            _clockRttSamplesNs.RemoveAt(0);
+                                        }
+
                                         if (rttNs < _clockBestRttNs)
                                         {
                                             _clockBestRttNs = rttNs;
@@ -1176,10 +1215,10 @@ namespace Ryujinx.Input.HLE.SmashSync
             Send(packet, packet.Length);
         }
 
-        private void SendControl(PacketType type, long session, long stamp)
+        private void SendControl(PacketType type, long session, long stamp, byte count = 0)
         {
             byte[] packet = new byte[HeaderSize];
-            WriteHeader(packet, type, (byte)LocalPlayerIndex, 0, session, unchecked(++_sendControlSequence), stamp);
+            WriteHeader(packet, type, (byte)LocalPlayerIndex, count, session, unchecked(++_sendControlSequence), stamp);
             Send(packet, packet.Length);
         }
 
@@ -1245,6 +1284,39 @@ namespace Ryujinx.Input.HLE.SmashSync
         {
             for (int i = 0; i < states.Count; i++) if (states[i].PlayerId == player) return states[i];
             return Neutral(player);
+        }
+
+        private long GetPercentileRttNsLocked(double percentile)
+        {
+            if (_clockRttSamplesNs.Count == 0)
+            {
+                return long.MaxValue;
+            }
+
+            long[] ordered = _clockRttSamplesNs.OrderBy(value => value).ToArray();
+            int index = (int)Math.Ceiling(percentile * ordered.Length) - 1;
+            return ordered[Math.Clamp(index, 0, ordered.Length - 1)];
+        }
+
+        private int SelectInputDelayTicks(long representativeRttNs)
+        {
+            if (representativeRttNs <= 0 || representativeRttNs == long.MaxValue)
+            {
+                return Math.Clamp(_config.InputDelayTicks, 0, MaxAdaptiveInputDelayTicks);
+            }
+
+            long oneWayBudgetNs = representativeRttNs / 2 + InputDelaySafetyNs;
+            int estimatedTicks = (int)Math.Ceiling(oneWayBudgetNs / (double)_tickIntervalNs);
+
+            return Math.Clamp(
+                Math.Max(_config.InputDelayTicks, estimatedTicks),
+                0,
+                MaxAdaptiveInputDelayTicks);
+        }
+
+        public void NotifyResumeDispatch()
+        {
+            _resumeDispatchNs = MonotonicNowNs();
         }
 
         private static GamepadInput Neutral(PlayerIndex player) => new() { PlayerId = player };
