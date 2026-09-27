@@ -279,6 +279,25 @@ namespace Ryujinx.Input.HLE
 
         private PlayerInputAssignment GetPlayerInputAssignment(InputConfig inputConfig)
         {
+            if (_smashSync?.CanonicalRouting == true &&
+                (PlayerIndex)(int)inputConfig.PlayerIndex == _smashSync.CanonicalLocalPlayer)
+            {
+                PlayerInputAssignment fixedLocal = new()
+                {
+                    PlayerIndex = inputConfig.PlayerIndex,
+                    EnableDynamicInputSwap = false,
+                };
+
+                AssignedInputDevice primary = PlayerInputAssignmentHelper.CreatePrimaryDevice(inputConfig);
+                if (primary != null &&
+                    !string.Equals(primary.Id, SmashSyncRemoteGamepadDriver.RemoteId, StringComparison.Ordinal))
+                {
+                    fixedLocal.Devices.Add(primary);
+                }
+
+                return fixedLocal;
+            }
+
             PlayerInputAssignment playerInputAssignment = _playerInputAssignments.FirstOrDefault(assignment => assignment.PlayerIndex == inputConfig.PlayerIndex);
 
             if (playerInputAssignment != null)
@@ -430,9 +449,15 @@ namespace Ryujinx.Input.HLE
                     PlayerIndex playerIndex = (PlayerIndex)inputConfig.PlayerIndex;
 
                     bool isJoyconPair = false;
+                    bool canonicalRemote =
+                        _smashSync?.CanonicalRouting == true &&
+                        playerIndex == _smashSync.CanonicalRemotePlayer;
 
-                    // Do we allow input updates and is a controller connected?
-                    if (_inputUpdateBlockCount == 0 && controller != null)
+                    // During SmashSync netplay the canonical remote slot is supplied
+                    // exclusively by the network session. Do not poll its visible
+                    // Ryujinx device here, otherwise a peer input can be selected as a
+                    // local source and echoed back to the other side.
+                    if (!canonicalRemote && _inputUpdateBlockCount == 0 && controller != null)
                     {
                         DriverConfigurationUpdate(ref controller, inputConfig, GetPlayerInputAssignment(inputConfig));
 
