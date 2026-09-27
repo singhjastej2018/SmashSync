@@ -5,9 +5,12 @@ namespace Ryujinx.Cpu
 {
     public class TickSource : ITickSource
     {
-        private static Stopwatch _tickCounter;
+        private readonly object _sync = new();
+        private readonly Stopwatch _tickCounter;
+        private readonly double _hostTickFreq;
 
-        private static double _hostTickFreq;
+        private long _accumElapsedTicks;
+        private long _lastElapsedTicks;
 
         /// <inheritdoc/>
         public ulong Frequency { get; }
@@ -15,29 +18,36 @@ namespace Ryujinx.Cpu
         /// <inheritdoc/>
         public ulong Counter => (ulong)(ElapsedSeconds * Frequency);
 
-
         public long TickScalar { get; set; }
 
-        private static long _acumElapsedTicks;
+        private long AccumulateElapsedTicksLocked()
+        {
+            long elapsedTicks = _tickCounter.ElapsedTicks;
+            long delta = elapsedTicks - _lastElapsedTicks;
 
-        private static long _lastElapsedTicks;
+            // Stopwatch is monotonic, but Reset changes its epoch. Treat any
+            // unexpected negative delta as zero rather than corrupting guest time.
+            if (delta > 0)
+            {
+                _accumElapsedTicks += delta * TickScalar / 100;
+            }
+
+            _lastElapsedTicks = elapsedTicks;
+            return _accumElapsedTicks;
+        }
 
         private long ElapsedTicks
         {
             get
             {
-                long elapsedTicks = _tickCounter.ElapsedTicks;
-
-                _acumElapsedTicks += (elapsedTicks - _lastElapsedTicks) * TickScalar / 100;
-
-                _lastElapsedTicks = elapsedTicks;
-
-                return _acumElapsedTicks;
+                lock (_sync)
+                {
+                    return AccumulateElapsedTicksLocked();
+                }
             }
         }
 
         /// <inheritdoc/>
-
         public TimeSpan ElapsedTime => Stopwatch.GetElapsedTime(0, ElapsedTicks);
 
         /// <inheritdoc/>
@@ -48,34 +58,56 @@ namespace Ryujinx.Cpu
             Frequency = frequency;
             _hostTickFreq = 1.0 / Stopwatch.Frequency;
 
-            _tickCounter = new Stopwatch();
-            _tickCounter.Start();
+            _tickCounter = Stopwatch.StartNew();
         }
 
         /// <inheritdoc/>
         public void Suspend()
         {
-            _tickCounter.Stop();
+            lock (_sync)
+            {
+                if (!_tickCounter.IsRunning)
+                {
+                    return;
+                }
+
+                AccumulateElapsedTicksLocked();
+                _tickCounter.Stop();
+            }
         }
 
         /// <inheritdoc/>
         public void Reset()
         {
-            bool wasRunning = _tickCounter.IsRunning;
-            _tickCounter.Reset();
-            _acumElapsedTicks = 0;
-            _lastElapsedTicks = 0;
-
-            if (wasRunning)
+            lock (_sync)
             {
-                _tickCounter.Start();
+                bool wasRunning = _tickCounter.IsRunning;
+
+                _tickCounter.Reset();
+                _accumElapsedTicks = 0;
+                _lastElapsedTicks = 0;
+
+                if (wasRunning)
+                {
+                    _tickCounter.Start();
+                }
             }
         }
 
         /// <inheritdoc/>
         public void Resume()
         {
-            _tickCounter.Start();
+            lock (_sync)
+            {
+                if (_tickCounter.IsRunning)
+                {
+                    return;
+                }
+
+                // Do not count host wall time spent suspended.
+                _lastElapsedTicks = _tickCounter.ElapsedTicks;
+                _tickCounter.Start();
+            }
         }
     }
 }
