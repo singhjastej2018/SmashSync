@@ -1,0 +1,49 @@
+name: Build SmashSync Windows x64
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build -c Release -p:ExtraDefineConstants=DISABLE_UPDATER
+
+      - name: Test
+        run: dotnet test --no-build -c Release
+        continue-on-error: true
+
+      - name: Publish Windows x64
+        run: dotnet publish src/Ryujinx/Ryujinx.csproj -c Release -r win-x64 --self-contained true -o publish -p:ExtraDefineConstants=DISABLE_UPDATER
+
+      - name: Create default portable folder
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force publish/portable | Out-Null
+
+      - name: Copy SmashSync docs
+        shell: pwsh
+        run: |
+          Copy-Item docs/SmashSync.md publish/SMASHSYNC.md
+          Copy-Item smashsync.example.json publish/smashsync.example.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmashSync-win-x64
+          path: publish
