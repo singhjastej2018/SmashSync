@@ -547,24 +547,40 @@ namespace Ryujinx.HLE.HOS
         {
             lock (KernelContext.Processes)
             {
-                foreach (KProcess process in KernelContext.Processes.Values)
+                if (pause)
                 {
-                    if (process.IsApplication)
+                    if (!IsPaused)
                     {
-                        // Only game process should be paused.
-                        process.SetActivity(pause);
+                        // Stop application execution first, then freeze guest time at
+                        // the point the application became inactive.
+                        foreach (KProcess process in KernelContext.Processes.Values)
+                        {
+                            if (process.IsApplication)
+                            {
+                                process.SetActivity(true);
+                            }
+                        }
+
+                        Device.AudioDeviceDriver.GetPauseEvent().Reset();
+                        TickSource.Suspend();
                     }
                 }
-
-                if (pause && !IsPaused)
+                else if (IsPaused)
                 {
-                    Device.AudioDeviceDriver.GetPauseEvent().Reset();
-                    TickSource.Suspend();
-                }
-                else if (!pause && IsPaused)
-                {
-                    Device.AudioDeviceDriver.GetPauseEvent().Set();
+                    // Resume guest time before making any application thread runnable.
+                    // SmashSync depends on this ordering: every resumed SSBU thread
+                    // must observe a guest counter that was started at the shared epoch,
+                    // never a briefly-stopped counter whose wake-up race differs by PC.
                     TickSource.Resume();
+                    Device.AudioDeviceDriver.GetPauseEvent().Set();
+
+                    foreach (KProcess process in KernelContext.Processes.Values)
+                    {
+                        if (process.IsApplication)
+                        {
+                            process.SetActivity(false);
+                        }
+                    }
                 }
             }
 
