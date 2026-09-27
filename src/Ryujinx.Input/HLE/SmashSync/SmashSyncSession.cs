@@ -102,6 +102,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         public ulong SharedTick => _tick;
 
         private int LocalPlayerIndex => _config.LocalPlayer - 1;
+        private int PhysicalPlayerIndex => _config.PhysicalPlayer - 1;
         private int RemotePlayerIndex => LocalPlayerIndex == 0 ? 1 : 0;
 
         private SmashSyncSession(SmashSyncConfig config)
@@ -307,7 +308,8 @@ namespace Ryujinx.Input.HLE.SmashSync
         private void NetplayTick(List<GamepadInput> states, List<SixAxisInput> motion)
         {
             PlayerIndex localPlayer = (PlayerIndex)LocalPlayerIndex;
-            GamepadInput physicalLocal = GetOrNeutral(states, localPlayer);
+            GamepadInput physicalLocal = GetOrNeutral(states, (PlayerIndex)PhysicalPlayerIndex);
+            physicalLocal.PlayerId = localPlayer;
 
             if (_state == RunState.WaitingForReady)
             {
