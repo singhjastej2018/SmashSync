@@ -22,7 +22,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private const int MaxRedundancy = 3;
         private const int ReleaseLeadMs = 120;
 
-        private enum PacketType : byte { Hello = 1, Ready = 2, Start = 3, StartAck = 4, Input = 5, Ping = 6, Pong = 7, Release = 8, ReleaseAck = 9 }
+        private enum PacketType : byte { Hello = 1, Ready = 2, Start = 3, StartAck = 4, Input = 5, Ping = 6, Pong = 7, Release = 8, ReleaseAck = 9, StateFingerprint = 10 }
         private enum RunState { WaitingForReady, PausingForReady, ReadyBarrier, WaitingForResume, Running, Failed }
 
         private sealed class ReplayInput
@@ -79,6 +79,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private volatile bool _startAckReceived;
         private volatile bool _releaseReceived;
         private volatile bool _releaseAckReceived;
+        private volatile bool _stateFingerprintReceived;
 
         private RunState _state;
         private bool _pauseRequested;
@@ -100,6 +101,10 @@ namespace Ryujinx.Input.HLE.SmashSync
         private long _barrierEnteredMs;
         private long _resumeTargetStamp;
         private long _lastRetransmitMs;
+        private long _lastStateFingerprintSendMs;
+        private ulong _localStateFingerprint;
+        private ulong _remoteStateFingerprint;
+        private bool _stateFingerprintReady;
         private readonly long _tickInterval;
         private long _nextTickStamp;
         private GamepadInput _lastP1;
@@ -165,6 +170,26 @@ namespace Ryujinx.Input.HLE.SmashSync
             }
         }
 
+        public void AttachDevice(Ryujinx.HLE.Switch device)
+        {
+            if (_mode != SmashSyncMode.Netplay || device == null)
+            {
+                return;
+            }
+
+            try
+            {
+                _localStateFingerprint = device.GetActiveApplicationStateFingerprint();
+                _stateFingerprintReady = true;
+                Log($"local start-state fingerprint=0x{_localStateFingerprint:x16}");
+            }
+            catch (Exception ex)
+            {
+                _stateFingerprintReady = false;
+                Log($"start-state fingerprint failed: {ex.Message}");
+            }
+        }
+
         public static SmashSyncSession TryCreate()
         {
             SmashSyncConfig config = SmashSyncConfig.LoadOrOff();
@@ -208,6 +233,22 @@ namespace Ryujinx.Input.HLE.SmashSync
                     _lastReadySendMs = now;
                 }
 
+                if (_stateFingerprintReady && now - _lastStateFingerprintSendMs >= 100)
+                {
+                    SendControl(PacketType.StateFingerprint, 0, unchecked((long)_localStateFingerprint));
+                    _lastStateFingerprintSendMs = now;
+                }
+
+                if (_stateFingerprintReceived && _stateFingerprintReady &&
+                    _remoteStateFingerprint != _localStateFingerprint)
+                {
+                    _state = RunState.Failed;
+                    _pauseRequested = false;
+                    _resumeRequested = false;
+                    Log($"START STATE MISMATCH local=0x{_localStateFingerprint:x16} remote=0x{_remoteStateFingerprint:x16}; keeping guest paused");
+                    return;
+                }
+
                 // Measure RTT while both guest processes are still frozen. This is
                 // used only to align the one-time release barrier, never as gameplay
                 // authority.
@@ -217,7 +258,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     _lastBarrierPingMs = now;
                 }
 
-                if (_peerReady)
+                if (_peerReady && _stateFingerprintReady && _stateFingerprintReceived)
                 {
                     if (LocalPlayerIndex == 0)
                     {
@@ -320,6 +361,9 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _startAckReceived = false;
                 _releaseReceived = false;
                 _releaseAckReceived = false;
+                _stateFingerprintReceived = false;
+                _remoteStateFingerprint = 0;
+                _lastStateFingerprintSendMs = 0;
                 _sessionId = 0;
                 _lastReadySendMs = 0;
                 _lastStartSendMs = 0;
@@ -461,6 +505,16 @@ namespace Ryujinx.Input.HLE.SmashSync
                     if (!_remoteHistory.TryGetValue(_tick, out remote))
                     {
                         _pauseRequested = true;
+                        if (_haveLastCombined)
+                        {
+                            ReplaceTwoPlayers(states, _lastP1, _lastP2);
+                            NeutralizeMotion(motion);
+                        }
+                        else
+                        {
+                            ReplaceTwoPlayers(states, Neutral(PlayerIndex.Player1), Neutral(PlayerIndex.Player2));
+                            NeutralizeMotion(motion);
+                        }
                         return;
                     }
                 }
@@ -650,6 +704,14 @@ namespace Ryujinx.Input.HLE.SmashSync
                                 if (!_releaseAckReceived) Log($"received RELEASE_ACK session={session}");
                                 _releaseAckReceived = true;
                             }
+                            break;
+                        case PacketType.StateFingerprint:
+                            _remoteStateFingerprint = unchecked((ulong)stamp);
+                            if (!_stateFingerprintReceived)
+                            {
+                                Log($"received start-state fingerprint=0x{_remoteStateFingerprint:x16}");
+                            }
+                            _stateFingerprintReceived = true;
                             break;
                         case PacketType.Input:
                             if (session == _sessionId && player == RemotePlayerIndex)
