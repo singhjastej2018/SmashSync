@@ -153,6 +153,16 @@ namespace Ryujinx.HLE.HOS.Services.Hid
 
         public void Update(IList<GamepadInput> states)
         {
+            UpdateInternal(states, null);
+        }
+
+        public void UpdateSmashSync(IList<GamepadInput> states, ulong sharedSamplingNumber)
+        {
+            UpdateInternal(states, sharedSamplingNumber);
+        }
+
+        private void UpdateInternal(IList<GamepadInput> states, ulong? forcedSamplingNumber)
+        {
             Remap();
 
             Span<bool> updated = stackalloc bool[10];
@@ -164,15 +174,40 @@ namespace Ryujinx.HLE.HOS.Services.Hid
 
                 updated[(int)state.PlayerId] = true;
 
-                UpdateInput(state);
+                UpdateInput(state, forcedSamplingNumber);
             }
 
             for (int i = 0; i < updated.Length; i++)
             {
                 if (!updated[i])
                 {
-                    UpdateDisconnectedInput((PlayerIndex)i);
+                    UpdateDisconnectedInput((PlayerIndex)i, forcedSamplingNumber);
                 }
+            }
+        }
+
+        public void ResetSmashSyncInputHistory()
+        {
+            Remap();
+
+            for (int i = (int)PlayerIndex.Player1; i <= (int)PlayerIndex.Player2; i++)
+            {
+                ref NpadInternalState npad = ref _device.Hid.SharedMemory.Npads[i].InternalState;
+
+                npad.FullKey.Clear();
+                npad.Handheld.Clear();
+                npad.JoyDual.Clear();
+                npad.JoyLeft.Clear();
+                npad.JoyRight.Clear();
+                npad.Palma.Clear();
+                npad.SystemExt.Clear();
+
+                npad.FullKeySixAxisSensor.Clear();
+                npad.HandheldSixAxisSensor.Clear();
+                npad.JoyDualSixAxisSensor.Clear();
+                npad.JoyDualRightSixAxisSensor.Clear();
+                npad.JoyLeftSixAxisSensor.Clear();
+                npad.JoyRightSixAxisSensor.Clear();
             }
         }
 
@@ -335,21 +370,27 @@ namespace Ryujinx.HLE.HOS.Services.Hid
             }
         }
 
-        private void UpdateUnusedInputIfNotEqual(ref RingLifo<NpadCommonState> currentlyUsed, ref RingLifo<NpadCommonState> possiblyUnused)
+        private void UpdateUnusedInputIfNotEqual(
+            ref RingLifo<NpadCommonState> currentlyUsed,
+            ref RingLifo<NpadCommonState> possiblyUnused,
+            ulong? forcedSamplingNumber = null)
         {
             if (!Unsafe.AreSame(ref currentlyUsed, ref possiblyUnused))
             {
                 NpadCommonState newState = new();
 
-                WriteNewInputEntry(ref possiblyUnused, ref newState);
+                WriteNewInputEntry(ref possiblyUnused, ref newState, forcedSamplingNumber);
             }
         }
 
-        private void WriteNewInputEntry(ref RingLifo<NpadCommonState> lifo, ref NpadCommonState state)
+        private void WriteNewInputEntry(
+            ref RingLifo<NpadCommonState> lifo,
+            ref NpadCommonState state,
+            ulong? forcedSamplingNumber = null)
         {
             ref NpadCommonState previousEntry = ref lifo.GetCurrentEntryRef();
 
-            state.SamplingNumber = previousEntry.SamplingNumber + 1;
+            state.SamplingNumber = forcedSamplingNumber ?? previousEntry.SamplingNumber + 1;
 
             lifo.Write(ref state);
         }
@@ -373,7 +414,7 @@ namespace Ryujinx.HLE.HOS.Services.Hid
             lifo.Write(ref state);
         }
 
-        private void UpdateInput(GamepadInput state)
+        private void UpdateInput(GamepadInput state, ulong? forcedSamplingNumber = null)
         {
             if (state.PlayerId == PlayerIndex.Unknown)
             {
@@ -423,34 +464,34 @@ namespace Ryujinx.HLE.HOS.Services.Hid
                     break;
             }
 
-            WriteNewInputEntry(ref lifo, ref newState);
+            WriteNewInputEntry(ref lifo, ref newState, forcedSamplingNumber);
 
             // Mirror data to Default layout just in case
             if (!currentNpad.StyleSet.HasFlag(NpadStyleTag.SystemExt))
             {
-                WriteNewInputEntry(ref currentNpad.SystemExt, ref newState);
+                WriteNewInputEntry(ref currentNpad.SystemExt, ref newState, forcedSamplingNumber);
             }
 
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.FullKey);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.Handheld);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyDual);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyLeft);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyRight);
-            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.Palma);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.FullKey, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.Handheld, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyDual, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyLeft, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.JoyRight, forcedSamplingNumber);
+            UpdateUnusedInputIfNotEqual(ref lifo, ref currentNpad.Palma, forcedSamplingNumber);
         }
 
-        private void UpdateDisconnectedInput(PlayerIndex index)
+        private void UpdateDisconnectedInput(PlayerIndex index, ulong? forcedSamplingNumber = null)
         {
             ref NpadInternalState currentNpad = ref _device.Hid.SharedMemory.Npads[(int)index].InternalState;
 
             NpadCommonState newState = new();
 
-            WriteNewInputEntry(ref currentNpad.FullKey, ref newState);
-            WriteNewInputEntry(ref currentNpad.Handheld, ref newState);
-            WriteNewInputEntry(ref currentNpad.JoyDual, ref newState);
-            WriteNewInputEntry(ref currentNpad.JoyLeft, ref newState);
-            WriteNewInputEntry(ref currentNpad.JoyRight, ref newState);
-            WriteNewInputEntry(ref currentNpad.Palma, ref newState);
+            WriteNewInputEntry(ref currentNpad.FullKey, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.Handheld, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.JoyDual, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.JoyLeft, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.JoyRight, ref newState, forcedSamplingNumber);
+            WriteNewInputEntry(ref currentNpad.Palma, ref newState, forcedSamplingNumber);
         }
 
         public void UpdateSixAxis(IList<SixAxisInput> states)
