@@ -950,7 +950,7 @@ namespace Ryujinx.Ava.Systems
                         {
                             return SmashSyncLobbyService.WaitForAuthoritativeSave(
                                 smashSyncTitleId,
-                                SmashSyncLobbyService.HandshakeTimeoutMs,
+                                0,
                                 out byte[] snapshot)
                                 ? snapshot
                                 : null;
