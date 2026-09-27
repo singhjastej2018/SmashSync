@@ -82,13 +82,15 @@ namespace Ryujinx.Input.HLE.SmashSync
         private bool _resumeRequested;
         private bool _ownsPause;
         private long _sessionId;
-        private uint _sendSequence;
+        private uint _sendInputSequence;
+        private uint _sendControlSequence;
         private uint _lastRemoteSequence;
         private ulong _tick;
         private ulong _digest = 14695981039346656037UL;
         private long _lastPingStamp;
         private double _lastRttMs;
         private long _lastControlSendMs;
+        private long _lastRetransmitMs;
         private readonly long _tickInterval;
         private long _nextTickStamp;
         private GamepadInput _lastP1;
@@ -222,6 +224,15 @@ namespace Ryujinx.Input.HLE.SmashSync
                 if (!haveRemote)
                 {
                     _pauseRequested = true;
+
+                    // If both sides paused because the same UDP input was lost,
+                    // there may be no newer packet to carry a redundant copy.
+                    // Retransmit this exact logical tick while the barrier is held.
+                    if (now - _lastRetransmitMs >= 8 && _localHistory.ContainsKey(_tick))
+                    {
+                        SendInputs(_tick);
+                        _lastRetransmitMs = now;
+                    }
                 }
                 else if (_ownsPause)
                 {
@@ -615,7 +626,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         {
             byte[] packet = new byte[HeaderSize + RecordSize * MaxRedundancy];
             Span<byte> data = packet;
-            uint sequence = unchecked(++_sendSequence);
+            uint sequence = unchecked(++_sendInputSequence);
             WriteHeader(data, PacketType.Input, (byte)LocalPlayerIndex, 0, _sessionId, sequence, 0);
 
             int count = 0;
@@ -648,7 +659,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private void SendControl(PacketType type, long session, long stamp)
         {
             byte[] packet = new byte[HeaderSize];
-            WriteHeader(packet, type, (byte)LocalPlayerIndex, 0, session, unchecked(++_sendSequence), stamp);
+            WriteHeader(packet, type, (byte)LocalPlayerIndex, 0, session, unchecked(++_sendControlSequence), stamp);
             Send(packet, packet.Length);
         }
 
