@@ -22,6 +22,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         public string PeerAddress { get; set; } = "";
         public int LocalPort { get; set; } = 27888;
         public int PeerPort { get; set; } = 27888;
+        public int SyncHz { get; set; } = 60;
         public int InputDelayTicks { get; set; } = 2;
         public int LockstepTimeoutMs { get; set; } = 5000;
         public int HandshakeTimeoutMs { get; set; } = 30000;
@@ -59,6 +60,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 config.PhysicalPlayer = Math.Clamp(config.PhysicalPlayer, 1, 8);
                 config.LocalPort = Math.Clamp(config.LocalPort, 1, 65535);
                 config.PeerPort = Math.Clamp(config.PeerPort, 1, 65535);
+                config.SyncHz = Math.Clamp(config.SyncHz, 30, 240);
                 config.InputDelayTicks = Math.Clamp(config.InputDelayTicks, 0, 12);
                 config.LockstepTimeoutMs = Math.Clamp(config.LockstepTimeoutMs, 250, 60000);
                 config.HandshakeTimeoutMs = Math.Clamp(config.HandshakeTimeoutMs, 1000, 120000);
