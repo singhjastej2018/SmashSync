@@ -51,6 +51,9 @@ namespace Ryujinx.HLE
 
         public bool TurboMode = false;
 
+        private string _smashSyncSaveOverrideRoot;
+        private string _smashSyncSaveBackupRoot;
+
         public long TickScalar
         {
             get => System?.TickSource?.TickScalar ?? ITickSource.RealityTickScalar;
@@ -180,6 +183,220 @@ namespace Ryujinx.HLE
         public void DisarmApplicationStartPause()
         {
             Configuration.SuspendApplicationOnStart = false;
+        }
+
+        private ulong GetActiveAccountSaveId()
+        {
+            ulong programId = Processes.ActiveApplication?.ProgramId ?? 0UL;
+            if (programId == 0)
+            {
+                throw new InvalidOperationException("No active application is loaded.");
+            }
+
+            HorizonClient client = System.LibHacHorizonManager.FsClient;
+            var accountUserId = System.AccountManager.LastOpenedUser.UserId;
+            LibHac.Fs.UserId userId = new((ulong)accountUserId.High, (ulong)accountUserId.Low);
+
+            SaveDataFilter filter = SaveDataFilter.Make(
+                programId: default,
+                saveType: SaveDataType.Account,
+                userId: userId,
+                saveDataId: default,
+                index: default);
+
+            using UniqueRef<SaveDataIterator> iterator = new();
+            client.Fs.OpenSaveDataIterator(ref iterator.Ref, SaveDataSpaceId.User, in filter).ThrowIfFailure();
+
+            Span<SaveDataInfo> infos = stackalloc SaveDataInfo[16];
+
+            while (true)
+            {
+                iterator.Get.ReadSaveDataInfo(out long readCount, infos).ThrowIfFailure();
+                if (readCount == 0)
+                {
+                    break;
+                }
+
+                for (int i = 0; i < readCount; i++)
+                {
+                    SaveDataInfo info = infos[i];
+                    if (info.ProgramId.Value == programId)
+                    {
+                        return info.SaveDataId;
+                    }
+                }
+            }
+
+            throw new InvalidOperationException($"No account save exists for active title {programId:x16}.");
+        }
+
+        private string GetActiveAccountSaveRoot()
+        {
+            ulong saveId = GetActiveAccountSaveId();
+            return System.IO.Path.Combine(VirtualFileSystem.GetNandPath(), $"user/save/{saveId:x16}");
+        }
+
+        public byte[] CreateActiveApplicationSaveArchive()
+        {
+            string saveRoot = GetActiveAccountSaveRoot();
+            if (!Directory.Exists(saveRoot))
+            {
+                throw new DirectoryNotFoundException($"Active title save directory was not found: {saveRoot}");
+            }
+
+            using MemoryStream output = new();
+            using (System.IO.Compression.ZipArchive zip = new(output, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+            {
+                foreach (string file in Directory.EnumerateFiles(saveRoot, "*", SearchOption.AllDirectories)
+                    .OrderBy(path => path, StringComparer.Ordinal))
+                {
+                    string relative = System.IO.Path.GetRelativePath(saveRoot, file).Replace('\\', '/');
+                    System.IO.Compression.ZipArchiveEntry entry = zip.CreateEntry(relative, System.IO.Compression.CompressionLevel.Fastest);
+
+                    using Stream source = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    using Stream destination = entry.Open();
+                    source.CopyTo(destination);
+                }
+            }
+
+            return output.ToArray();
+        }
+
+        public void ApplySmashSyncAuthoritativeSave(byte[] archive)
+        {
+            ArgumentNullException.ThrowIfNull(archive);
+
+            if (_smashSyncSaveOverrideRoot != null)
+            {
+                RestoreSmashSyncAuthoritativeSave();
+            }
+
+            string saveRoot = GetActiveAccountSaveRoot();
+            ulong programId = Processes.ActiveApplication?.ProgramId ?? 0UL;
+            string backupBase = System.IO.Path.Combine(AppDataManager.BaseDirPath, "smashsync-save-backups");
+            Directory.CreateDirectory(backupBase);
+
+            string backupRoot = System.IO.Path.Combine(
+                backupBase,
+                $"{programId:x16}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}");
+
+            if (Directory.Exists(saveRoot))
+            {
+                CopyDirectory(saveRoot, backupRoot);
+            }
+            else
+            {
+                Directory.CreateDirectory(backupRoot);
+            }
+
+            try
+            {
+                if (Directory.Exists(saveRoot))
+                {
+                    Directory.Delete(saveRoot, recursive: true);
+                }
+
+                Directory.CreateDirectory(saveRoot);
+                string canonicalRoot = System.IO.Path.GetFullPath(saveRoot) + System.IO.Path.DirectorySeparatorChar;
+
+                using MemoryStream input = new(archive, writable: false);
+                using System.IO.Compression.ZipArchive zip = new(input, System.IO.Compression.ZipArchiveMode.Read);
+
+                foreach (System.IO.Compression.ZipArchiveEntry entry in zip.Entries)
+                {
+                    if (string.IsNullOrEmpty(entry.Name))
+                    {
+                        continue;
+                    }
+
+                    string destination = System.IO.Path.GetFullPath(
+                        System.IO.Path.Combine(saveRoot, entry.FullName.Replace('/', System.IO.Path.DirectorySeparatorChar)));
+
+                    if (!destination.StartsWith(canonicalRoot, StringComparison.OrdinalIgnoreCase))
+                    {
+                        throw new InvalidDataException("Authoritative save archive contains an invalid path.");
+                    }
+
+                    Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destination));
+                    using Stream source = entry.Open();
+                    using FileStream target = new(destination, FileMode.Create, FileAccess.Write, FileShare.None);
+                    source.CopyTo(target);
+                }
+
+                _smashSyncSaveOverrideRoot = saveRoot;
+                _smashSyncSaveBackupRoot = backupRoot;
+                Logger.Info?.Print(LogClass.Application, $"SmashSync: P1 authoritative save applied for {programId:x16}; P2 backup={backupRoot}");
+            }
+            catch
+            {
+                try
+                {
+                    if (Directory.Exists(saveRoot))
+                    {
+                        Directory.Delete(saveRoot, recursive: true);
+                    }
+
+                    CopyDirectory(backupRoot, saveRoot);
+                    Directory.Delete(backupRoot, recursive: true);
+                }
+                catch { }
+
+                throw;
+            }
+        }
+
+        public void RestoreSmashSyncAuthoritativeSave()
+        {
+            string saveRoot = _smashSyncSaveOverrideRoot;
+            string backupRoot = _smashSyncSaveBackupRoot;
+
+            _smashSyncSaveOverrideRoot = null;
+            _smashSyncSaveBackupRoot = null;
+
+            if (string.IsNullOrWhiteSpace(saveRoot) || string.IsNullOrWhiteSpace(backupRoot))
+            {
+                return;
+            }
+
+            try
+            {
+                if (Directory.Exists(saveRoot))
+                {
+                    Directory.Delete(saveRoot, recursive: true);
+                }
+
+                CopyDirectory(backupRoot, saveRoot);
+                Directory.Delete(backupRoot, recursive: true);
+                Logger.Info?.Print(LogClass.Application, "SmashSync: restored P2 local save after authoritative P1 session");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error?.Print(LogClass.Application, $"SmashSync: failed to restore P2 local save; backup kept at '{backupRoot}': {ex.Message}");
+            }
+        }
+
+        private static void CopyDirectory(string sourceRoot, string destinationRoot)
+        {
+            Directory.CreateDirectory(destinationRoot);
+
+            if (!Directory.Exists(sourceRoot))
+            {
+                return;
+            }
+
+            foreach (string directory in Directory.EnumerateDirectories(sourceRoot, "*", SearchOption.AllDirectories))
+            {
+                string relative = System.IO.Path.GetRelativePath(sourceRoot, directory);
+                Directory.CreateDirectory(System.IO.Path.Combine(destinationRoot, relative));
+            }
+
+            foreach (string file in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
+            {
+                string relative = System.IO.Path.GetRelativePath(sourceRoot, file);
+                string destination = System.IO.Path.Combine(destinationRoot, relative);
+                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destination));
+                File.Copy(file, destination, overwrite: true);
+            }
         }
 
         public ulong GetActiveApplicationStateFingerprint()
