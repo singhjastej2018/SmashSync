@@ -501,13 +501,20 @@ namespace Ryujinx.Input.HLE
                     hleKeyboardInput = NpadController.GetHLEKeyboardInput(_keyboardDriver);
                 }
 
+                bool commitGuestHid = true;
                 if (processSmashSync)
                 {
-                    _smashSync?.ProcessInputs(_hleInputStates, _hleMotionStates);
+                    commitGuestHid = _smashSync?.ProcessInputs(_hleInputStates, _hleMotionStates) ?? true;
                 }
 
-                _device.Hid.Npads.Update(_hleInputStates);
-                _device.Hid.Npads.UpdateSixAxis(_hleMotionStates);
+                // In synchronized netplay, one shared SmashSync sequence maps to
+                // exactly one guest HID sample. Host-loop iterations between shared
+                // ticks must not increment the guest Npad sampling number.
+                if (commitGuestHid)
+                {
+                    _device.Hid.Npads.Update(_hleInputStates);
+                    _device.Hid.Npads.UpdateSixAxis(_hleMotionStates);
+                }
 
                 if (hleKeyboardInput.HasValue)
                 {
@@ -558,7 +565,10 @@ namespace Ryujinx.Input.HLE
                     _device.Hid.Mouse.Update(0, 0);
                 }
 
-                _device.TamperMachine.UpdateInput(_hleInputStates);
+                if (commitGuestHid)
+                {
+                    _device.TamperMachine.UpdateInput(_hleInputStates);
+                }
             }
         }
 
