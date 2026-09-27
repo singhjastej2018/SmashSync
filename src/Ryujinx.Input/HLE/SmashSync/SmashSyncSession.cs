@@ -118,9 +118,15 @@ namespace Ryujinx.Input.HLE.SmashSync
             _mode = config.ParsedMode;
             _tickInterval = Math.Max(1, Stopwatch.Frequency / _config.SyncHz);
             _nextTickStamp = Stopwatch.GetTimestamp();
-            _state = _mode == SmashSyncMode.Netplay && config.RequireReadyChord
-                ? RunState.WaitingForReady
-                : RunState.Running;
+            SmashSyncLobbyService.Initialize();
+            bool preGameAccepted = _mode == SmashSyncMode.Netplay && SmashSyncLobbyService.IsConnected;
+
+            _state = preGameAccepted
+                ? RunState.PausingForReady
+                : _mode == SmashSyncMode.Netplay && config.RequireReadyChord
+                    ? RunState.WaitingForReady
+                    : RunState.Running;
+            _pauseRequested = preGameAccepted;
 
             OpenLog();
 
@@ -139,7 +145,11 @@ namespace Ryujinx.Input.HLE.SmashSync
                 OpenNetwork();
             }
 
-            Log($"mode={_mode} localPlayer={_config.LocalPlayer} syncHz={_config.SyncHz} delay={_config.InputDelayTicks} readyChord={_config.RequireReadyChord}");
+            Log($"mode={_mode} localPlayer={_config.LocalPlayer} syncHz={_config.SyncHz} delay={_config.InputDelayTicks} readyChord={_config.RequireReadyChord} preGameAccepted={preGameAccepted}");
+            if (preGameAccepted)
+            {
+                Log("accepted pre-game lobby detected; automatic game synchronization armed");
+            }
         }
 
         public static SmashSyncSession TryCreate()
@@ -572,7 +582,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                             break;
                     }
                 }
-                catch (SocketException ex) when (ex.SocketErrorCode is SocketError.TimedOut or SocketError.Interrupted or SocketError.OperationAborted) { }
+                catch (SocketException ex) when (ex.SocketErrorCode is SocketError.TimedOut or SocketError.Interrupted or SocketError.OperationAborted or SocketError.ConnectionReset) { }
                 catch (ObjectDisposedException) { break; }
                 catch (Exception ex)
                 {
@@ -603,7 +613,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 {
                     int o = HeaderSize + i * RecordSize;
                     ulong tick = BinaryPrimitives.ReadUInt64LittleEndian(data[o..]);
-                    _remoteHistory[tick] = new GamepadInput
+                    GamepadInput remoteInput = new()
                     {
                         PlayerId = (PlayerIndex)RemotePlayerIndex,
                         Buttons = (ControllerKeys)BinaryPrimitives.ReadInt64LittleEndian(data[(o + 8)..]),
@@ -618,6 +628,11 @@ namespace Ryujinx.Input.HLE.SmashSync
                             Dy = BinaryPrimitives.ReadInt32LittleEndian(data[(o + 28)..]),
                         },
                     };
+                    _remoteHistory[tick] = remoteInput;
+                    if (i == 0)
+                    {
+                        SmashSyncLobbyService.UpdateRemoteInput(remoteInput);
+                    }
                 }
             }
         }
