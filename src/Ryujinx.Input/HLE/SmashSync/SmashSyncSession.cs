@@ -24,6 +24,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private const int ClockSyncMaxWaitMs = 750;
         private const int ClockSyncIntervalMs = 20;
         private const int EpochLeadMs = 500;
+        private const int ClockSyncPacketSize = HeaderSize + 8;
         private const int EpochPacketSize = HeaderSize + 8;
 
         private enum PacketType : byte
@@ -822,18 +823,23 @@ namespace Ryujinx.Input.HLE.SmashSync
                             if (LocalPlayerIndex == 1 && session > 0)
                             {
                                 long p2ReceiveNs = MonotonicNowNs();
-                                SendControl(PacketType.ClockSyncResponse, session, p2ReceiveNs);
+                                SendClockSyncResponse(session, p2ReceiveNs);
                             }
                             break;
                         case PacketType.ClockSyncResponse:
-                            if (LocalPlayerIndex == 0 && session > 0 && stamp > 0)
+                            if (LocalPlayerIndex == 0 && session > 0 && stamp > 0 && length >= ClockSyncPacketSize)
                             {
                                 long p1ReceiveNs = MonotonicNowNs();
-                                long rttNs = p1ReceiveNs - session;
+                                long p2SendNs = BinaryPrimitives.ReadInt64LittleEndian(data[HeaderSize..]);
+
+                                long remoteProcessingNs = Math.Max(0, p2SendNs - stamp);
+                                long rttNs = (p1ReceiveNs - session) - remoteProcessingNs;
 
                                 if (rttNs > 0 && rttNs < 2_000_000_000L)
                                 {
-                                    long offsetNs = stamp - (session + rttNs / 2);
+                                    // Standard four-timestamp clock offset:
+                                    // ((t2 - t1) + (t3 - t4)) / 2.
+                                    long offsetNs = ((stamp - session) + (p2SendNs - p1ReceiveNs)) / 2;
 
                                     lock (_clockLock)
                                     {
@@ -1004,6 +1010,15 @@ namespace Ryujinx.Input.HLE.SmashSync
         {
             _lastPingStamp = Stopwatch.GetTimestamp();
             SendControl(PacketType.Ping, _sessionId, _lastPingStamp);
+        }
+
+        private void SendClockSyncResponse(long p1SendNs, long p2ReceiveNs)
+        {
+            byte[] packet = new byte[ClockSyncPacketSize];
+            long p2SendNs = MonotonicNowNs();
+            WriteHeader(packet, PacketType.ClockSyncResponse, (byte)LocalPlayerIndex, 0, p1SendNs, unchecked(++_sendControlSequence), p2ReceiveNs);
+            BinaryPrimitives.WriteInt64LittleEndian(packet.AsSpan(HeaderSize, 8), p2SendNs);
+            Send(packet, packet.Length);
         }
 
         private void SendEpoch(long p1EpochNs, long p2MinusP1Ns)
