@@ -89,6 +89,11 @@ namespace Ryujinx.Input.HLE.SmashSync
         private long _lastPingStamp;
         private double _lastRttMs;
         private long _lastControlSendMs;
+        private readonly long _tickInterval;
+        private long _nextTickStamp;
+        private GamepadInput _lastP1;
+        private GamepadInput _lastP2;
+        private bool _haveLastCombined;
 
         private static readonly ControllerKeys ReadyChord =
             ControllerKeys.L | ControllerKeys.R | ControllerKeys.Plus | ControllerKeys.Minus;
@@ -109,6 +114,8 @@ namespace Ryujinx.Input.HLE.SmashSync
         {
             _config = config;
             _mode = config.ParsedMode;
+            _tickInterval = Math.Max(1, Stopwatch.Frequency / _config.SyncHz);
+            _nextTickStamp = Stopwatch.GetTimestamp();
             _state = _mode == SmashSyncMode.Netplay && config.RequireReadyChord
                 ? RunState.WaitingForReady
                 : RunState.Running;
@@ -130,7 +137,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 OpenNetwork();
             }
 
-            Log($"mode={_mode} localPlayer={_config.LocalPlayer} delay={_config.InputDelayTicks} readyChord={_config.RequireReadyChord}");
+            Log($"mode={_mode} localPlayer={_config.LocalPlayer} syncHz={_config.SyncHz} delay={_config.InputDelayTicks} readyChord={_config.RequireReadyChord}");
         }
 
         public static SmashSyncSession TryCreate()
@@ -204,7 +211,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     }
                 }
             }
-            else if (_state == RunState.Running && _tick >= (ulong)_config.InputDelayTicks)
+            else if (_state == RunState.Running && IsTickDue() && _tick >= (ulong)_config.InputDelayTicks)
             {
                 bool haveRemote;
                 lock (_remoteLock)
@@ -242,6 +249,10 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _startAckReceived = false;
                 _sessionId = 0;
                 _tick = 0;
+                _nextTickStamp = Stopwatch.GetTimestamp();
+                _lastP1 = Neutral(PlayerIndex.Player1);
+                _lastP2 = Neutral(PlayerIndex.Player2);
+                _haveLastCombined = true;
                 _localHistory.Clear();
                 lock (_remoteLock) _remoteHistory.Clear();
                 SendControl(PacketType.Ready, 0, 0);
@@ -289,15 +300,33 @@ namespace Ryujinx.Input.HLE.SmashSync
                 return;
             }
 
+            if (_mode == SmashSyncMode.Netplay && _state == RunState.WaitingForReady)
+            {
+                NetplayTick(states, motion);
+                return;
+            }
+
+            if ((_mode is SmashSyncMode.Replay or SmashSyncMode.Netplay) && _haveLastCombined && !IsTickDue())
+            {
+                ReplaceTwoPlayers(states, _lastP1, _lastP2);
+                NeutralizeMotion(motion);
+                return;
+            }
+
+            if (!IsTickDue())
+            {
+                return;
+            }
+
             switch (_mode)
             {
                 case SmashSyncMode.Record:
                     RecordTick(states);
-                    _tick++;
+                    AdvanceTick();
                     break;
                 case SmashSyncMode.Replay:
                     ReplayTick(states, motion);
-                    _tick++;
+                    AdvanceTick();
                     break;
                 case SmashSyncMode.Netplay:
                     NetplayTick(states, motion);
@@ -362,6 +391,9 @@ namespace Ryujinx.Input.HLE.SmashSync
 
             ReplaceTwoPlayers(states, p1, p2);
             NeutralizeMotion(motion);
+            _lastP1 = p1;
+            _lastP2 = p2;
+            _haveLastCombined = true;
 
             if ((_tick % 60) == 0)
             {
@@ -370,7 +402,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 Trim();
             }
 
-            _tick++;
+            AdvanceTick();
         }
 
         private void RecordTick(List<GamepadInput> states)
@@ -407,11 +439,22 @@ namespace Ryujinx.Input.HLE.SmashSync
 
             ReplaceTwoPlayers(states, p1, p2);
             NeutralizeMotion(motion);
+            _lastP1 = p1;
+            _lastP2 = p2;
+            _haveLastCombined = true;
 
             if ((_tick % 60) == 0)
             {
                 HashAndLog(p1, p2, "replay");
             }
+        }
+
+        private bool IsTickDue() => Stopwatch.GetTimestamp() >= _nextTickStamp;
+
+        private void AdvanceTick()
+        {
+            _tick++;
+            _nextTickStamp = Stopwatch.GetTimestamp() + _tickInterval;
         }
 
         private void OpenNetwork()
