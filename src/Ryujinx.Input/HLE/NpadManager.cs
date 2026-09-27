@@ -412,7 +412,7 @@ namespace Ryujinx.Input.HLE
             ReloadConfiguration(inputConfig, playerInputAssignments, enableKeyboard, enableMouse);
         }
 
-        public void Update(float aspectRatio = 1)
+        public void Update(float aspectRatio = 1, bool processSmashSync = true)
         {
             lock (_lock)
             {
@@ -475,7 +475,10 @@ namespace Ryujinx.Input.HLE
                     hleKeyboardInput = NpadController.GetHLEKeyboardInput(_keyboardDriver);
                 }
 
-                _smashSync?.ProcessInputs(_hleInputStates, _hleMotionStates);
+                if (processSmashSync)
+                {
+                    _smashSync?.ProcessInputs(_hleInputStates, _hleMotionStates);
+                }
 
                 _device.Hid.Npads.Update(_hleInputStates);
                 _device.Hid.Npads.UpdateSixAxis(_hleMotionStates);
