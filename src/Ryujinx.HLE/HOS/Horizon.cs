@@ -127,6 +127,7 @@ namespace Ryujinx.HLE.HOS
             if (device.Configuration.SuspendApplicationOnStart)
             {
                 TickSource.Suspend();
+                TickSource.Reset();
             }
 
             KernelContext = new KernelContext(
