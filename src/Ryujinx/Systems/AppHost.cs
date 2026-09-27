@@ -40,6 +40,7 @@ using Ryujinx.HLE.HOS;
 using Ryujinx.HLE.HOS.Services.Account.Acc;
 using Ryujinx.Input;
 using Ryujinx.Input.HLE;
+using Ryujinx.Input.HLE.SmashSync;
 using SkiaSharp;
 using SPB.Graphics.Vulkan;
 using System;
@@ -725,6 +726,13 @@ namespace Ryujinx.Ava.Systems
             InitEmulatedSwitch();
             MainWindow.UpdateGraphicsConfig();
 
+            bool smashSyncStartPaused = SmashSyncLobbyService.NetplayEnabled && SmashSyncLobbyService.IsConnected;
+            if (smashSyncStartPaused)
+            {
+                Device.ArmApplicationStartPause();
+                Logger.Info?.PrintMsg(LogClass.Application, "SmashSync: application start pause armed before guest process launch");
+            }
+
             SystemVersion firmwareVersion = ContentManager.GetCurrentFirmwareVersion();
 
             if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime)
@@ -922,6 +930,12 @@ namespace Ryujinx.Ava.Systems
 
                 cts.Cancel();
                 throw new OperationCanceledException(cts.Token);
+            }
+
+            if (smashSyncStartPaused)
+            {
+                Device.DisarmApplicationStartPause();
+                Logger.Info?.PrintMsg(LogClass.Application, "SmashSync: guest process loaded while paused; waiting for peer start barrier");
             }
 
             ApplicationLibrary.LoadAndSaveMetaData(Device.Processes.ActiveApplication.ProgramIdText,
@@ -1304,9 +1318,13 @@ namespace Ryujinx.Ava.Systems
 
             NpadManager.PumpSmashSyncControl();
 
-            if (NpadManager.SmashSyncPauseRequested && !Device.System.IsPaused)
+            if (NpadManager.SmashSyncPauseRequested && !NpadManager.SmashSyncOwnsPause)
             {
-                Pause();
+                if (!Device.System.IsPaused)
+                {
+                    Pause();
+                }
+
                 NpadManager.NotifySmashSyncPaused();
             }
 
