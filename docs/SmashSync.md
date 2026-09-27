@@ -103,3 +103,22 @@ Ping/pong timestamps are diagnostics only.
 ## Current limitation
 
 The v0 shared tick is paced independently at 60 Hz and applied through Ryujinx HID; it is not yet a verified SSBU internal simulation-frame counter. Matching input digests prove both instances consumed the same controller stream; they do not by themselves prove whole-game determinism. State hashing is the next milestone before rollback.
+
+
+## Determinism baseline
+
+For the first two-PC validation, keep these identical on both machines:
+
+- the exact SmashSync build/commit
+- SSBU base game version and update
+- installed DLC set
+- system firmware
+- relevant emulator settings and graphics backend
+- match rules, stage, fighters, and other gameplay-affecting options
+- mods/cheats disabled unless they are intentionally identical
+
+Normal SSBU save data does not have to remain identical forever, but using equivalent or copied save data for the first validation removes differences in unlocks, rulesets, and settings.
+
+Shader caches do not need to match and should remain local to each machine. Pre-warming caches can reduce one-sided shader-compilation stalls, but the cache is not part of SmashSync's shared logical state.
+
+SmashSync v0 does not depend on emulator save-state/snapshot functionality.
