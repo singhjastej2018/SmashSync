@@ -5,6 +5,7 @@
   "PeerAddress": "100.64.0.2",
   "LocalPort": 27888,
   "PeerPort": 27888,
+  "SyncHz": 60,
   "InputDelayTicks": 2,
   "LockstepTimeoutMs": 5000,
   "HandshakeTimeoutMs": 30000,
