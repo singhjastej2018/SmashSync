@@ -74,6 +74,16 @@ namespace Ryujinx.Input.HLE.SmashSync
         public static string PeerAddress => _config?.PeerAddress ?? "";
         public static int Port => _config?.LocalPort ?? 27888;
         public static int HandshakeTimeoutMs => _config?.HandshakeTimeoutMs ?? 30000;
+        public static long ConnectionToken
+        {
+            get
+            {
+                lock (Sync)
+                {
+                    return _connectionNonce;
+                }
+            }
+        }
         public static string LastError => _lastError;
 
         public static string StatusText
@@ -166,6 +176,15 @@ namespace Ryujinx.Input.HLE.SmashSync
             {
                 if (!NetplayEnabled || _disposed || IsConnected || HasIncomingRequest || _state == SmashSyncLobbyState.RequestSent)
                 {
+                    return;
+                }
+
+                // P1 is the single session authority. This removes simultaneous
+                // cross-connect races and makes the authoritative save/session owner
+                // unambiguous on both machines.
+                if (LocalPlayer != 1)
+                {
+                    SetError("P1 is the SmashSync session authority; connect from the P1 machine.");
                     return;
                 }
 
