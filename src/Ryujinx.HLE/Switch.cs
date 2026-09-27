@@ -85,6 +85,11 @@ namespace Ryujinx.HLE
             ArgumentNullException.ThrowIfNull(configuration.UserChannelPersistence);
 
             Configuration = configuration;
+
+            // Recover a P2 save if a previous SmashSync process terminated before
+            // the temporary P1-authoritative override could be restored.
+            RecoverStaleSmashSyncAuthoritativeSave();
+
             FileSystem = Configuration.VirtualFileSystem;
             UIHandler = Configuration.HostUIHandler;
 
@@ -274,6 +279,56 @@ namespace Ryujinx.HLE
             return output.ToArray();
         }
 
+        private static string SmashSyncSaveOverrideMarkerPath =>
+            global::System.IO.Path.Combine(AppDataManager.BaseDirPath, "smashsync-save-override.txt");
+
+        private static void RecoverStaleSmashSyncAuthoritativeSave()
+        {
+            string marker = SmashSyncSaveOverrideMarkerPath;
+            if (!File.Exists(marker))
+            {
+                return;
+            }
+
+            try
+            {
+                string[] lines = File.ReadAllLines(marker);
+                if (lines.Length < 2)
+                {
+                    throw new InvalidDataException("SmashSync save recovery marker is incomplete.");
+                }
+
+                string baseRoot = global::System.IO.Path.GetFullPath(AppDataManager.BaseDirPath) +
+                    global::System.IO.Path.DirectorySeparatorChar;
+                string saveRoot = global::System.IO.Path.GetFullPath(lines[0]);
+                string backupRoot = global::System.IO.Path.GetFullPath(lines[1]);
+
+                if (!saveRoot.StartsWith(baseRoot, StringComparison.OrdinalIgnoreCase) ||
+                    !backupRoot.StartsWith(baseRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("SmashSync save recovery marker points outside the application data directory.");
+                }
+
+                if (Directory.Exists(backupRoot))
+                {
+                    if (Directory.Exists(saveRoot))
+                    {
+                        Directory.Delete(saveRoot, recursive: true);
+                    }
+
+                    CopyDirectory(backupRoot, saveRoot);
+                    Directory.Delete(backupRoot, recursive: true);
+                }
+
+                File.Delete(marker);
+                Logger.Info?.Print(LogClass.Application, "SmashSync: recovered P2 local save from an interrupted authoritative-save session.");
+            }
+            catch (Exception ex)
+            {
+                Logger.Error?.Print(LogClass.Application, $"SmashSync: automatic save recovery failed; recovery marker kept at '{marker}': {ex.Message}");
+            }
+        }
+
         public void ApplySmashSyncAuthoritativeSave(byte[] archive)
         {
             ArgumentNullException.ThrowIfNull(archive);
@@ -300,6 +355,8 @@ namespace Ryujinx.HLE
             {
                 Directory.CreateDirectory(backupRoot);
             }
+
+            File.WriteAllLines(SmashSyncSaveOverrideMarkerPath, [saveRoot, backupRoot]);
 
             try
             {
@@ -350,6 +407,10 @@ namespace Ryujinx.HLE
 
                     CopyDirectory(backupRoot, saveRoot);
                     Directory.Delete(backupRoot, recursive: true);
+                    if (File.Exists(SmashSyncSaveOverrideMarkerPath))
+                    {
+                        File.Delete(SmashSyncSaveOverrideMarkerPath);
+                    }
                 }
                 catch { }
 
@@ -379,6 +440,10 @@ namespace Ryujinx.HLE
 
                 CopyDirectory(backupRoot, saveRoot);
                 Directory.Delete(backupRoot, recursive: true);
+                if (File.Exists(SmashSyncSaveOverrideMarkerPath))
+                {
+                    File.Delete(SmashSyncSaveOverrideMarkerPath);
+                }
                 Logger.Info?.Print(LogClass.Application, "SmashSync: restored P2 local save after authoritative P1 session");
             }
             catch (Exception ex)
