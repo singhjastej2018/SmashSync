@@ -24,6 +24,19 @@ jobs:
         with:
           dotnet-version: 10.0.x
 
+      - name: Build required Ryujinx.LibHac package
+        shell: pwsh
+        run: |
+          git clone --filter=blob:none https://gitlab.com/ryujinx-classic/LibHac.git vendor/LibHac
+          git -C vendor/LibHac checkout e39169ab5053ff179b7fef38f624dfc608d2596c
+          $project = Get-ChildItem vendor/LibHac -Filter *.csproj -Recurse |
+            Where-Object { $_.Name -eq 'LibHac.csproj' } |
+            Select-Object -First 1
+          if (-not $project) { throw 'LibHac.csproj was not found in the mirror.' }
+          New-Item -ItemType Directory -Force vendor-packages | Out-Null
+          dotnet pack $project.FullName -c Release -o vendor-packages -p:PackageId=Ryujinx.LibHac -p:PackageVersion=0.21.0-alpha.133
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Restore Windows x64
         run: dotnet restore src/Ryujinx/Ryujinx.csproj -r win-x64
 
