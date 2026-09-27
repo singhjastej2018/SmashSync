@@ -1369,9 +1369,16 @@ namespace Ryujinx.Ava.Systems
                     // SmashSync synchronization pauses are internal barriers, not
                     // user pauses. Avoid the normal UI/title/log/GC pause path.
                     Device.System.TogglePauseEmulation(true);
+                    NpadManager.NotifySmashSyncPaused();
                 }
-
-                NpadManager.NotifySmashSyncPaused();
+                else if (NpadManager.SmashSyncCanAdoptExistingPause)
+                {
+                    // The pre-launch pause was armed by SmashSync before guest
+                    // construction. It is safe for the session to adopt that pause.
+                    NpadManager.NotifySmashSyncPaused();
+                }
+                // Never adopt an unrelated user pause while a runtime network stall
+                // is pending. Otherwise SmashSync could later resume the user's pause.
             }
 
             if (NpadManager.SmashSyncResumeRequested && NpadManager.SmashSyncOwnsPause && Device.System.IsPaused)
@@ -1407,10 +1414,15 @@ namespace Ryujinx.Ava.Systems
                 if (!Device.System.IsPaused)
                 {
                     Device.System.TogglePauseEmulation(true);
+                    NpadManager.NotifySmashSyncPaused();
+                    return true;
                 }
 
-                NpadManager.NotifySmashSyncPaused();
-                return true;
+                if (NpadManager.SmashSyncCanAdoptExistingPause)
+                {
+                    NpadManager.NotifySmashSyncPaused();
+                    return true;
+                }
             }
 
             if (_viewModel.IsActive)
