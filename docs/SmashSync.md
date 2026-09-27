@@ -162,7 +162,7 @@ SmashSync uses a four-timestamp clock exchange to estimate P2-minus-P1 monotonic
 
 ## Strict start-state and HID sequencing
 
-Before releasing an accepted netplay session, SmashSync computes a 64-bit SHA-256-derived fingerprint over the active title/version, language/region/docked mode, and the active title's account save-data contents. Because P2 temporarily boots from P1's authoritative save, both peers should produce the same persistent-state fingerprint after transfer.
+Before releasing an accepted netplay session, SmashSync computes a 64-bit SHA-256-derived fingerprint over the active title/version, firmware version, guest-visible language/region/docked/memory/timing settings, configured dirty hacks, and the active title's account save-data contents. Because P2 temporarily boots from P1's authoritative save, both peers should produce the same persistent-state fingerprint after transfer.
 
 If the fingerprints differ, the guest remains paused and the session log reports `START STATE MISMATCH`. This fingerprint verifies the synchronized launch inputs and persistent state; it is not a whole-emulator savestate or proof that every hidden runtime subsystem is identical.
 
