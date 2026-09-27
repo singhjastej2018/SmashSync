@@ -1328,7 +1328,7 @@ namespace Ryujinx.Ava.Systems
                 _inputManager.KeyboardDriver.Clear();
             }
 
-            NpadManager.Update(ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat());
+            NpadManager.Update(ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat(), !Device.System.IsPaused);
 
             if (_viewModel.IsActive)
             {
