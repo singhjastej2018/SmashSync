@@ -1006,6 +1006,14 @@ namespace Ryujinx.Input.HLE.SmashSync
             SendControl(PacketType.Ping, _sessionId, _lastPingStamp);
         }
 
+        private void SendEpoch(long p1EpochNs, long p2MinusP1Ns)
+        {
+            byte[] packet = new byte[EpochPacketSize];
+            WriteHeader(packet, PacketType.Epoch, (byte)LocalPlayerIndex, 0, _sessionId, unchecked(++_sendControlSequence), p1EpochNs);
+            BinaryPrimitives.WriteInt64LittleEndian(packet.AsSpan(HeaderSize, 8), p2MinusP1Ns);
+            Send(packet, packet.Length);
+        }
+
         private void SendControl(PacketType type, long session, long stamp)
         {
             byte[] packet = new byte[HeaderSize];
