@@ -84,8 +84,8 @@ Launch SmashSync on both PCs before launching SSBU.
 
 The bottom status bar shows the configured peer address and lobby state.
 
-1. One player clicks **Request**.
-2. The other player sees an incoming request and clicks **Accept**.
+1. **P1** clicks **Request**.
+2. **P2** sees the incoming request and clicks **Accept**.
 3. Both sides show **connected**.
 4. The remote SmashSync controller becomes available in Ryujinx input devices.
 5. Configure the canonical P1/P2 controller slots as described above.
@@ -96,13 +96,20 @@ A game launch is blocked while Netplay mode is enabled but the pre-game peer han
 
 Both PCs still run SSBU locally. SmashSync does not remotely execute programs on the other PC.
 
-Either player may launch SSBU first. The first instance automatically enters a SmashSync-owned pause once the game-side input session is initialized and waits for the other machine to launch. When both game-side sessions are present:
+Either player may launch SSBU first. The first instance automatically enters a SmashSync-owned pause once the game-side input session is initialized and waits for the other machine to launch.
 
-- both exchange READY packets over UDP;
-- P1 creates the gameplay session ID;
+P1 is authoritative for persistent SSBU save data during the session. While both guests are still paused, P1 packages its active SSBU account save and transfers it over the TCP lobby connection. P2 temporarily installs that copy before its application main thread is released. P2's original local save is backed up and restored when the SmashSync session ends; interrupted-session recovery is also supported.
+
+When both game-side sessions are present:
+
+- both exchange lobby-bound READY packets over UDP;
+- P1 and P2 perform a four-timestamp monotonic-clock synchronization;
+- P1 creates a cryptographically random gameplay session ID;
 - P2 acknowledges it;
-- both reset the shared logical input tick to 0;
-- both resume automatically.
+- P1 schedules a future shared epoch;
+- P2 acknowledges the epoch;
+- P1 sends the final RELEASE and P2 acknowledges it;
+- both reset the shared logical input tick to 0 and resume at the shared epoch.
 
 The old `L + R + Plus + Minus` chord remains only as a fallback when no accepted pre-game lobby exists.
 
@@ -139,7 +146,7 @@ For initial testing, keep these identical on both machines:
 - match rules, stage, fighters, and other gameplay-affecting options;
 - mods/cheats disabled unless intentionally identical.
 
-Equivalent save data is useful for eliminating differences in unlocks, rulesets, and settings. Shader caches do not need to match.
+P2 does not need to manually copy P1's SSBU save before a session; SmashSync transfers P1's active save automatically and restores P2's local save afterward. Shader caches do not need to match.
 
 
 ## Canonical input routing
@@ -148,13 +155,24 @@ During an accepted SmashSync session, only the canonical local player's physical
 
 ## Synchronized release
 
-For accepted pre-game sessions, the application main thread is suspended with the emulator's normal process-pause flag before guest execution begins. Both peers remain suspended through READY/START. SmashSync measures UDP RTT while paused, then P1 sends a RELEASE barrier with a future lead time. P2 compensates approximately half its measured RTT before scheduling its resume, reducing the one-way START/ACK head-start that previously allowed one guest to begin several milliseconds before the other.
+For accepted pre-game sessions, the guest tick source is frozen before kernel initialization and reset to zero. The application main thread is then suspended with the emulator's normal process-pause flag before guest execution begins. Both peers remain suspended through READY/START.
+
+SmashSync uses a four-timestamp clock exchange to estimate P2-minus-P1 monotonic-clock offset. P1 schedules a future P1-authoritative epoch, P2 converts it into its local monotonic-clock domain, and a RELEASE/RELEASE_ACK commit is required before either side arms the resume. Gameplay synchronization after launch is based on shared logical tick numbers rather than continuously sharing a wall clock.
 
 
 ## Strict start-state and HID sequencing
 
-Before releasing an accepted netplay session, SmashSync computes a 64-bit SHA-256-derived fingerprint over the active title/version, language/region/docked mode, and the active title's account save-data contents. Only the fingerprint crosses the network. Save files are not transferred.
+Before releasing an accepted netplay session, SmashSync computes a 64-bit SHA-256-derived fingerprint over the active title/version, language/region/docked mode, and the active title's account save-data contents. Because P2 temporarily boots from P1's authoritative save, both peers should produce the same persistent-state fingerprint after transfer.
 
-If the fingerprints differ, the guest remains paused and the session log reports `START STATE MISMATCH`. This prevents two already-different SSBU menu/battle states from silently continuing with identical input packets.
+If the fingerprints differ, the guest remains paused and the session log reports `START STATE MISMATCH`. This fingerprint verifies the synchronized launch inputs and persistent state; it is not a whole-emulator savestate or proof that every hidden runtime subsystem is identical.
 
 During synchronized netplay, host input polling no longer writes a fresh guest Npad sample on every UI-loop iteration. A guest HID sample is committed only when the shared SmashSync logical sequence advances. Thus one logical sequence corresponds to one P1/P2 HID sample on both machines, reducing drift caused by different host-loop sampling counts.
+
+
+## Reliability hardening
+
+Gameplay input ticks are immutable once assigned. Retransmission never resamples a logical tick, and a conflicting duplicate from the peer is treated as a deterministic protocol failure rather than silently overwriting history.
+
+Incoming ticks are bounded to a small window around the current logical tick, startup/control packets are bound to the accepted TCP lobby nonce, runtime lockstep stalls honor `LockstepTimeoutMs`, and SmashSync never takes ownership of an unrelated manual emulator pause.
+
+The guest tick source is instance-local and internally synchronized so concurrent guest-time reads cannot mutate shared static timing state.
