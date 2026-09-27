@@ -427,6 +427,7 @@ namespace Ryujinx.Input.HLE
         {
             _device = device;
             _device.Configuration.RefreshInputConfig = RefreshInputConfigForHLE;
+            _smashSync?.AttachDevice(device);
 
             ReloadConfiguration(inputConfig, playerInputAssignments, enableKeyboard, enableMouse);
         }
