@@ -416,29 +416,28 @@ namespace Ryujinx.Input.HLE.SmashSync
             Log($"barrier complete session={_sessionId}; requesting resume");
         }
 
-        public void ProcessInputs(List<GamepadInput> states, List<SixAxisInput> motion)
+        public bool ProcessInputs(List<GamepadInput> states, List<SixAxisInput> motion)
         {
             if (_disposed)
             {
-                return;
+                return true;
             }
 
             if (_mode == SmashSyncMode.Netplay && _state == RunState.WaitingForReady)
             {
-                NetplayTick(states, motion);
-                return;
+                return NetplayTick(states, motion);
             }
 
             if ((_mode is SmashSyncMode.Replay or SmashSyncMode.Netplay) && _haveLastCombined && !IsTickDue())
             {
                 ReplaceTwoPlayers(states, _lastP1, _lastP2);
                 NeutralizeMotion(motion);
-                return;
+                return false;
             }
 
             if (!IsTickDue())
             {
-                return;
+                return _mode == SmashSyncMode.Record;
             }
 
             switch (_mode)
@@ -446,18 +445,19 @@ namespace Ryujinx.Input.HLE.SmashSync
                 case SmashSyncMode.Record:
                     RecordTick(states);
                     AdvanceTick();
-                    break;
+                    return true;
                 case SmashSyncMode.Replay:
                     ReplayTick(states, motion);
                     AdvanceTick();
-                    break;
+                    return true;
                 case SmashSyncMode.Netplay:
-                    NetplayTick(states, motion);
-                    break;
+                    return NetplayTick(states, motion);
+                default:
+                    return true;
             }
         }
 
-        private void NetplayTick(List<GamepadInput> states, List<SixAxisInput> motion)
+        private bool NetplayTick(List<GamepadInput> states, List<SixAxisInput> motion)
         {
             PlayerIndex localPlayer = (PlayerIndex)LocalPlayerIndex;
             GamepadInput physicalLocal = GetOrNeutral(states, (PlayerIndex)PhysicalPlayerIndex);
@@ -476,12 +476,12 @@ namespace Ryujinx.Input.HLE.SmashSync
                     Log("ready chord detected; requesting pause");
                 }
 
-                return;
+                return true;
             }
 
             if (_state != RunState.Running)
             {
-                return;
+                return false;
             }
 
             ulong targetTick = _tick + (ulong)_config.InputDelayTicks;
@@ -515,7 +515,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                             ReplaceTwoPlayers(states, Neutral(PlayerIndex.Player1), Neutral(PlayerIndex.Player2));
                             NeutralizeMotion(motion);
                         }
-                        return;
+                        return false;
                     }
                 }
             }
@@ -540,6 +540,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             }
 
             AdvanceTick();
+            return true;
         }
 
         private void RecordTick(List<GamepadInput> states)
