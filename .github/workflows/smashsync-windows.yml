@@ -52,6 +52,15 @@ jobs:
       - name: Publish Windows x64
         run: dotnet publish src/Ryujinx/Ryujinx.csproj -c Release -r win-x64 --self-contained true --no-restore -o publish -p:ExtraDefineConstants=DISABLE_UPDATER
 
+      - name: Rename published executable
+        shell: pwsh
+        run: |
+          if (Test-Path publish/Ryujinx.exe) {
+            Move-Item publish/Ryujinx.exe publish/SmashSync.exe -Force
+          } elseif (-not (Test-Path publish/SmashSync.exe)) {
+            throw "Published executable was not found."
+          }
+
       - name: Create default portable folder
         shell: pwsh
         run: New-Item -ItemType Directory -Force publish/portable | Out-Null
