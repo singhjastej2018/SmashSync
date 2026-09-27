@@ -18,6 +18,7 @@ namespace Ryujinx.Input.HLE.SmashSync
     {
         public string Mode { get; set; } = "Off";
         public int LocalPlayer { get; set; } = 1;
+        public int PhysicalPlayer { get; set; } = 1;
         public string PeerAddress { get; set; } = "";
         public int LocalPort { get; set; } = 27888;
         public int PeerPort { get; set; } = 27888;
@@ -29,6 +30,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         public string RecordFile { get; set; } = "smashsync-record.jsonl";
         public string LogFile { get; set; } = "smashsync-session.log";
         public bool ConfigureTwoPlayers { get; set; } = true;
+        public bool RequireReadyChord { get; set; } = true;
 
         public SmashSyncMode ParsedMode =>
             Enum.TryParse(Mode, true, out SmashSyncMode mode) ? mode : SmashSyncMode.Off;
@@ -54,6 +56,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     }) ?? new SmashSyncConfig();
 
                 config.LocalPlayer = Math.Clamp(config.LocalPlayer, 1, 2);
+                config.PhysicalPlayer = Math.Clamp(config.PhysicalPlayer, 1, 8);
                 config.LocalPort = Math.Clamp(config.LocalPort, 1, 65535);
                 config.PeerPort = Math.Clamp(config.PeerPort, 1, 65535);
                 config.InputDelayTicks = Math.Clamp(config.InputDelayTicks, 0, 12);
