@@ -492,9 +492,25 @@ namespace Ryujinx.HLE
 
             AddText(hash, programId.ToString("x16"));
             AddText(hash, version);
+
+            // Hash guest-visible platform/configuration inputs that can change game
+            // behavior even when the title and persistent save are identical.
+            AddText(hash, System.ContentManager.GetCurrentFirmwareVersion()?.VersionString ?? "no-firmware");
             AddText(hash, Configuration.SystemLanguage.ToString());
             AddText(hash, Configuration.Region.ToString());
             AddText(hash, Configuration.EnableDockedMode ? "docked" : "handheld");
+            AddText(hash, Configuration.MemoryConfiguration.ToString());
+            AddText(hash, Configuration.MemoryManagerMode.ToString());
+            AddText(hash, Configuration.TickScalar.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
+            AddText(hash, Configuration.UseHypervisor ? "hypervisor" : "jit");
+            AddText(hash, Configuration.EnableInternetAccess ? "internet" : "offline");
+            AddText(hash, Configuration.SystemTimeOffset.ToString(global::System.Globalization.CultureInfo.InvariantCulture));
+            AddText(hash, Configuration.TimeZone ?? string.Empty);
+
+            foreach (EnabledDirtyHack hack in Configuration.Hacks.OrderBy(h => h.ToString(), StringComparer.Ordinal))
+            {
+                AddText(hash, $"hack:{hack}");
+            }
 
             try
             {
