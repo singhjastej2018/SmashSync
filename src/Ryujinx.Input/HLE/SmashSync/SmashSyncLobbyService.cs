@@ -24,7 +24,7 @@ namespace Ryujinx.Input.HLE.SmashSync
 
     public static class SmashSyncLobbyService
     {
-        private const int ProtocolVersion = 4;
+        private const int ProtocolVersion = 5;
         private const string ProtocolName = "SMASHSYNC";
 
         private static readonly object Sync = new();
