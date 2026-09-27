@@ -1330,6 +1330,11 @@ namespace Ryujinx.Ava.Systems
 
             if (NpadManager.SmashSyncResumeRequested && NpadManager.SmashSyncOwnsPause && Device.System.IsPaused)
             {
+                // Startup release is armed ahead of the shared P1-authoritative
+                // monotonic epoch. Wait here with sub-frame precision instead of
+                // quantizing resume to whichever host render-loop iteration happens
+                // to notice the release first.
+                NpadManager.WaitForSmashSyncResumeEpoch();
                 Resume();
                 NpadManager.NotifySmashSyncResumed();
             }
