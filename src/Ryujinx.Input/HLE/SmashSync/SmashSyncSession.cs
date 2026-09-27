@@ -124,9 +124,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private long _lastReadySendMs;
         private long _lastStartSendMs;
         private long _lastReleaseSendMs;
-        private long _lastBarrierPingMs;
         private long _barrierEnteredMs;
-        private long _resumeTargetStamp;
         private long _lastRetransmitMs;
         private long _lockstepStallStartedMs;
         private long _lastClockSyncSendMs;
@@ -480,7 +478,6 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _lastReadySendMs = 0;
                 _lastStartSendMs = 0;
                 _lastReleaseSendMs = 0;
-                _lastBarrierPingMs = 0;
                 _lastClockSyncSendMs = 0;
                 _clockSyncStartedMs = 0;
                 _lastEpochSendMs = 0;
