@@ -233,7 +233,7 @@ namespace Ryujinx.HLE
         private string GetActiveAccountSaveRoot()
         {
             ulong saveId = GetActiveAccountSaveId();
-            return System.IO.Path.Combine(VirtualFileSystem.GetNandPath(), $"user/save/{saveId:x16}");
+            return global::System.IO.Path.Combine(VirtualFileSystem.GetNandPath(), $"user/save/{saveId:x16}");
         }
 
         public byte[] CreateActiveApplicationSaveArchive()
@@ -245,13 +245,13 @@ namespace Ryujinx.HLE
             }
 
             using MemoryStream output = new();
-            using (System.IO.Compression.ZipArchive zip = new(output, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+            using (global::System.IO.Compression.ZipArchive zip = new(output, global::System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
             {
                 foreach (string file in Directory.EnumerateFiles(saveRoot, "*", SearchOption.AllDirectories)
                     .OrderBy(path => path, StringComparer.Ordinal))
                 {
-                    string relative = System.IO.Path.GetRelativePath(saveRoot, file).Replace('\\', '/');
-                    System.IO.Compression.ZipArchiveEntry entry = zip.CreateEntry(relative, System.IO.Compression.CompressionLevel.Fastest);
+                    string relative = global::System.IO.Path.GetRelativePath(saveRoot, file).Replace('\\', '/');
+                    global::System.IO.Compression.ZipArchiveEntry entry = zip.CreateEntry(relative, global::System.IO.Compression.CompressionLevel.Fastest);
 
                     using Stream source = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
                     using Stream destination = entry.Open();
@@ -273,10 +273,10 @@ namespace Ryujinx.HLE
 
             string saveRoot = GetActiveAccountSaveRoot();
             ulong programId = Processes.ActiveApplication?.ProgramId ?? 0UL;
-            string backupBase = System.IO.Path.Combine(AppDataManager.BaseDirPath, "smashsync-save-backups");
+            string backupBase = global::System.IO.Path.Combine(AppDataManager.BaseDirPath, "smashsync-save-backups");
             Directory.CreateDirectory(backupBase);
 
-            string backupRoot = System.IO.Path.Combine(
+            string backupRoot = global::System.IO.Path.Combine(
                 backupBase,
                 $"{programId:x16}-{DateTime.UtcNow:yyyyMMdd-HHmmssfff}");
 
@@ -297,27 +297,27 @@ namespace Ryujinx.HLE
                 }
 
                 Directory.CreateDirectory(saveRoot);
-                string canonicalRoot = System.IO.Path.GetFullPath(saveRoot) + System.IO.Path.DirectorySeparatorChar;
+                string canonicalRoot = global::System.IO.Path.GetFullPath(saveRoot) + global::System.IO.Path.DirectorySeparatorChar;
 
                 using MemoryStream input = new(archive, writable: false);
-                using System.IO.Compression.ZipArchive zip = new(input, System.IO.Compression.ZipArchiveMode.Read);
+                using global::System.IO.Compression.ZipArchive zip = new(input, global::System.IO.Compression.ZipArchiveMode.Read);
 
-                foreach (System.IO.Compression.ZipArchiveEntry entry in zip.Entries)
+                foreach (global::System.IO.Compression.ZipArchiveEntry entry in zip.Entries)
                 {
                     if (string.IsNullOrEmpty(entry.Name))
                     {
                         continue;
                     }
 
-                    string destination = System.IO.Path.GetFullPath(
-                        System.IO.Path.Combine(saveRoot, entry.FullName.Replace('/', System.IO.Path.DirectorySeparatorChar)));
+                    string destination = global::System.IO.Path.GetFullPath(
+                        global::System.IO.Path.Combine(saveRoot, entry.FullName.Replace('/', global::System.IO.Path.DirectorySeparatorChar)));
 
                     if (!destination.StartsWith(canonicalRoot, StringComparison.OrdinalIgnoreCase))
                     {
                         throw new InvalidDataException("Authoritative save archive contains an invalid path.");
                     }
 
-                    Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destination));
+                    Directory.CreateDirectory(global::System.IO.Path.GetDirectoryName(destination));
                     using Stream source = entry.Open();
                     using FileStream target = new(destination, FileMode.Create, FileAccess.Write, FileShare.None);
                     source.CopyTo(target);
@@ -386,15 +386,15 @@ namespace Ryujinx.HLE
 
             foreach (string directory in Directory.EnumerateDirectories(sourceRoot, "*", SearchOption.AllDirectories))
             {
-                string relative = System.IO.Path.GetRelativePath(sourceRoot, directory);
-                Directory.CreateDirectory(System.IO.Path.Combine(destinationRoot, relative));
+                string relative = global::System.IO.Path.GetRelativePath(sourceRoot, directory);
+                Directory.CreateDirectory(global::System.IO.Path.Combine(destinationRoot, relative));
             }
 
             foreach (string file in Directory.EnumerateFiles(sourceRoot, "*", SearchOption.AllDirectories))
             {
-                string relative = System.IO.Path.GetRelativePath(sourceRoot, file);
-                string destination = System.IO.Path.Combine(destinationRoot, relative);
-                Directory.CreateDirectory(System.IO.Path.GetDirectoryName(destination));
+                string relative = global::System.IO.Path.GetRelativePath(sourceRoot, file);
+                string destination = global::System.IO.Path.Combine(destinationRoot, relative);
+                Directory.CreateDirectory(global::System.IO.Path.GetDirectoryName(destination));
                 File.Copy(file, destination, overwrite: true);
             }
         }
@@ -460,7 +460,7 @@ namespace Ryujinx.HLE
                 {
                     AddText(hash, "save");
 
-                    string saveRoot = System.IO.Path.Combine(VirtualFileSystem.GetNandPath(), $"user/save/{saveId:x16}");
+                    string saveRoot = global::System.IO.Path.Combine(VirtualFileSystem.GetNandPath(), $"user/save/{saveId:x16}");
                     if (!Directory.Exists(saveRoot))
                     {
                         AddText(hash, "missing");
@@ -470,7 +470,7 @@ namespace Ryujinx.HLE
                     foreach (string file in Directory.EnumerateFiles(saveRoot, "*", SearchOption.AllDirectories)
                         .OrderBy(path => path, StringComparer.Ordinal))
                     {
-                        string relative = System.IO.Path.GetRelativePath(saveRoot, file).Replace('\\', '/');
+                        string relative = global::System.IO.Path.GetRelativePath(saveRoot, file).Replace('\\', '/');
                         AddText(hash, relative);
 
                         using FileStream stream = new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
