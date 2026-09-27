@@ -28,7 +28,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private const ulong MaxRemoteTickLead = 512;
         private const int ReleaseMinLeadMs = 10;
         private const int MaxAdaptiveInputDelayTicks = 6;
-        private const long InputDelaySafetyNs = 2_000_000L;
+        private const long InputDelaySafetyNs = 4_000_000L;
         private const int ClockSyncPacketSize = HeaderSize + 8;
         private const int EpochPacketSize = HeaderSize + 8;
 
