@@ -102,6 +102,7 @@ namespace Ryujinx.Input.HLE
         public bool SmashSyncResumeRequested => _smashSync?.ResumeRequested == true;
         public bool SmashSyncOwnsPause => _smashSync?.OwnsPause == true;
         public bool SmashSyncCanAdoptExistingPause => _smashSync?.CanAdoptExistingPause == true;
+        public bool SmashSyncCanonicalRouting => _smashSync?.CanonicalRouting == true;
 
         public void NotifySmashSyncPaused()
         {
@@ -111,6 +112,10 @@ namespace Ryujinx.Input.HLE
             {
                 ConfigureSmashSyncControllers();
                 _device.Hid.Npads.ResetSmashSyncInputHistory();
+                _device.Hid.Keyboard.ResetSmashSyncInputHistory();
+                _device.Hid.Mouse.ResetSmashSyncInputHistory();
+                _device.Hid.Touchscreen.ResetSmashSyncInputHistory();
+                _device.Hid.DebugPad.ResetSmashSyncInputHistory();
             }
 
             _smashSync?.NotifyPaused();
@@ -512,7 +517,9 @@ namespace Ryujinx.Input.HLE
                     }
                 }
 
-                if (_inputUpdateBlockCount == 0 && _enableKeyboard)
+                bool canonicalRouting = _smashSync?.CanonicalRouting == true;
+
+                if (!canonicalRouting && _inputUpdateBlockCount == 0 && _enableKeyboard)
                 {
                     hleKeyboardInput = NpadController.GetHLEKeyboardInput(_keyboardDriver);
                 }
@@ -544,12 +551,12 @@ namespace Ryujinx.Input.HLE
                     }
                 }
 
-                if (hleKeyboardInput.HasValue)
+                if (!canonicalRouting && hleKeyboardInput.HasValue)
                 {
                     _device.Hid.Keyboard.Update(hleKeyboardInput.Value);
                 }
 
-                if (_enableMouse)
+                if (!canonicalRouting && _enableMouse)
                 {
                     IMouse mouse = _mouseDriver.GetGamepad("0") as IMouse;
 
@@ -588,7 +595,7 @@ namespace Ryujinx.Input.HLE
                     
                     ArrayPool<bool>.Shared.Return(mouseInput.ButtonState);
                 }
-                else
+                else if (!canonicalRouting)
                 {
                     _device.Hid.Mouse.Update(0, 0);
                 }
