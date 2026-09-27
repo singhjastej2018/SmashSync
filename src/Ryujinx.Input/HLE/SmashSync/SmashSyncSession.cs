@@ -818,27 +818,79 @@ namespace Ryujinx.Input.HLE.SmashSync
                                 _startAckReceived = true;
                             }
                             break;
-                        case PacketType.Release:
-                            if (LocalPlayerIndex == 1 && session == _sessionId)
+                        case PacketType.ClockSyncRequest:
+                            if (LocalPlayerIndex == 1 && session > 0)
                             {
-                                if (!_releaseReceived)
-                                {
-                                    double oneWayMs = Math.Clamp(_lastRttMs * 0.5, 0.0, ReleaseLeadMs - 20.0);
-                                    double remainingMs = Math.Max(20.0, ReleaseLeadMs - oneWayMs);
-                                    _resumeTargetStamp = Stopwatch.GetTimestamp() + MillisecondsToStopwatchTicks(remainingMs);
-                                    _releaseReceived = true;
-                                    Log($"received RELEASE session={session} rttMs={_lastRttMs:F2} resumeInMs={remainingMs:F2}");
-                                }
-
-                                SendControl(PacketType.ReleaseAck, session, 0);
+                                long p2ReceiveNs = MonotonicNowNs();
+                                SendControl(PacketType.ClockSyncResponse, session, p2ReceiveNs);
                             }
                             break;
-                        case PacketType.ReleaseAck:
+                        case PacketType.ClockSyncResponse:
+                            if (LocalPlayerIndex == 0 && session > 0 && stamp > 0)
+                            {
+                                long p1ReceiveNs = MonotonicNowNs();
+                                long rttNs = p1ReceiveNs - session;
+
+                                if (rttNs > 0 && rttNs < 2_000_000_000L)
+                                {
+                                    long offsetNs = stamp - (session + rttNs / 2);
+
+                                    lock (_clockLock)
+                                    {
+                                        _clockSamples++;
+                                        if (rttNs < _clockBestRttNs)
+                                        {
+                                            _clockBestRttNs = rttNs;
+                                            _clockOffsetNs = offsetNs;
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        case PacketType.Epoch:
+                            if (LocalPlayerIndex == 1 && session == _sessionId && length >= EpochPacketSize)
+                            {
+                                long p2MinusP1Ns = BinaryPrimitives.ReadInt64LittleEndian(data[HeaderSize..]);
+                                long localTargetNs = stamp + p2MinusP1Ns;
+                                long remainingNs = localTargetNs - MonotonicNowNs();
+
+                                if (remainingNs >= 20_000_000L)
+                                {
+                                    _sharedEpochP1Ns = stamp;
+                                    _localEpochNs = localTargetNs;
+                                    _epochReceived = true;
+                                    SendControl(PacketType.EpochAck, session, stamp);
+                                    Log($"received shared epoch p1Ns={stamp} localNs={localTargetNs} resumeInMs={remainingNs / 1_000_000.0:F3}");
+                                }
+                                else
+                                {
+                                    SendControl(PacketType.EpochAck, session, 0);
+                                    Log($"rejected late shared epoch remainingMs={remainingNs / 1_000_000.0:F3}");
+                                }
+                            }
+                            break;
+                        case PacketType.EpochAck:
                             if (LocalPlayerIndex == 0 && session == _sessionId)
                             {
-                                if (!_releaseAckReceived) Log($"received RELEASE_ACK session={session}");
-                                _releaseAckReceived = true;
+                                if (stamp == _sharedEpochP1Ns && stamp != 0)
+                                {
+                                    if (!_epochAckReceived)
+                                    {
+                                        Log($"received shared epoch ACK p1Ns={stamp}");
+                                    }
+                                    _epochAckReceived = true;
+                                }
+                                else if (stamp == 0)
+                                {
+                                    _epochAckReceived = false;
+                                    _sharedEpochP1Ns = 0;
+                                    _localEpochNs = 0;
+                                    Log("peer rejected late epoch; scheduling a new shared epoch");
+                                }
                             }
+                            break;
+                        case PacketType.Release:
+                        case PacketType.ReleaseAck:
                             break;
                         case PacketType.StateFingerprint:
                             _remoteStateFingerprint = unchecked((ulong)stamp);
