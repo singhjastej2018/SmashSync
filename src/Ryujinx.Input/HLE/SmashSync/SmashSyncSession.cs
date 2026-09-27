@@ -17,7 +17,7 @@ namespace Ryujinx.Input.HLE.SmashSync
     internal sealed class SmashSyncSession : IDisposable
     {
         private const uint Magic = 0x504E5353; // SSNP
-        private const byte Version = 5;
+        private const byte Version = 6;
         private const int HeaderSize = 32;
         private const int RecordSize = 32;
         private const int MaxRedundancy = 3;
@@ -31,6 +31,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private const long InputDelaySafetyNs = 4_000_000L;
         private const int ClockSyncPacketSize = HeaderSize + 8;
         private const int EpochPacketSize = HeaderSize + 8;
+        private const int InputDigestPacketSize = HeaderSize + 8;
 
         private enum PacketType : byte
         {
@@ -48,6 +49,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             ClockSyncResponse = 12,
             Epoch = 13,
             EpochAck = 14,
+            InputDigest = 15,
         }
         private enum RunState { WaitingForReady, PausingForReady, ReadyBarrier, WaitingForResume, Running, Failed }
 
@@ -89,11 +91,14 @@ namespace Ryujinx.Input.HLE.SmashSync
         private readonly object _remoteLock = new();
         private readonly object _sendLock = new();
         private readonly object _clockLock = new();
+        private readonly object _digestLock = new();
         private readonly HashSet<long> _pendingClockSyncRequests = [];
         private readonly List<long> _clockRttSamplesNs = [];
         private readonly Dictionary<ulong, GamepadInput> _localHistory = [];
         private readonly Dictionary<ulong, GamepadInput> _remoteHistory = [];
         private readonly Dictionary<ulong, ReplayFrame> _replay = [];
+        private readonly Dictionary<ulong, ulong> _localDigestCheckpoints = [];
+        private readonly Dictionary<ulong, ulong> _remoteDigestCheckpoints = [];
 
         private Socket _socket;
         private EndPoint _peer;
@@ -1105,6 +1110,15 @@ namespace Ryujinx.Input.HLE.SmashSync
                                 ReadInputs(data, count, sequence);
                             }
                             break;
+                        case PacketType.InputDigest:
+                            if (session == _sessionId &&
+                                player == RemotePlayerIndex &&
+                                length >= InputDigestPacketSize)
+                            {
+                                ulong digestTick = BinaryPrimitives.ReadUInt64LittleEndian(data[HeaderSize..]);
+                                ReadInputDigest(digestTick, unchecked((ulong)stamp));
+                            }
+                            break;
                         case PacketType.Ping:
                             if (session == _sessionId) SendControl(PacketType.Pong, session, stamp);
                             break;
@@ -1135,11 +1149,19 @@ namespace Ryujinx.Input.HLE.SmashSync
         {
             int records = Math.Min(Math.Clamp(count, 0, MaxRedundancy), (data.Length - HeaderSize) / RecordSize);
 
-            if (_lastRemoteSequence != 0 && sequence > _lastRemoteSequence + 1)
+            if (_lastRemoteSequence != 0 && SequenceNewer(sequence, _lastRemoteSequence))
             {
-                Log($"packet gap previous={_lastRemoteSequence} current={sequence}");
+                uint distance = unchecked(sequence - _lastRemoteSequence);
+                if (distance > 1)
+                {
+                    Log($"packet gap previous={_lastRemoteSequence} current={sequence}");
+                }
             }
-            if (sequence > _lastRemoteSequence) _lastRemoteSequence = sequence;
+
+            if (_lastRemoteSequence == 0 || SequenceNewer(sequence, _lastRemoteSequence))
+            {
+                _lastRemoteSequence = sequence;
+            }
 
             lock (_remoteLock)
             {
@@ -1214,6 +1236,21 @@ namespace Ryujinx.Input.HLE.SmashSync
 
             data[7] = (byte)count;
             Send(packet, HeaderSize + count * RecordSize);
+        }
+
+        private void SendInputDigest(ulong tick, ulong digest)
+        {
+            byte[] packet = new byte[InputDigestPacketSize];
+            WriteHeader(
+                packet,
+                PacketType.InputDigest,
+                (byte)LocalPlayerIndex,
+                0,
+                _sessionId,
+                unchecked(++_sendControlSequence),
+                unchecked((long)digest));
+            BinaryPrimitives.WriteUInt64LittleEndian(packet.AsSpan(HeaderSize, 8), tick);
+            Send(packet, packet.Length);
         }
 
         private void SendPing()
@@ -1343,6 +1380,67 @@ namespace Ryujinx.Input.HLE.SmashSync
             _resumeDispatchNs = MonotonicNowNs();
         }
 
+        private static bool SequenceNewer(uint sequence, uint previous) =>
+            sequence != previous && unchecked((int)(sequence - previous)) > 0;
+
+        private void PublishInputDigestCheckpoint()
+        {
+            ulong tick = _tick;
+            ulong digest = _digest;
+            ulong remoteDigest = 0;
+            bool haveRemote;
+
+            lock (_digestLock)
+            {
+                _localDigestCheckpoints[tick] = digest;
+                haveRemote = _remoteDigestCheckpoints.TryGetValue(tick, out remoteDigest);
+            }
+
+            SendInputDigest(tick, digest);
+
+            if (haveRemote)
+            {
+                VerifyInputDigest(tick, digest, remoteDigest);
+            }
+        }
+
+        private void ReadInputDigest(ulong tick, ulong digest)
+        {
+            ulong localDigest = 0;
+            bool haveLocal;
+
+            lock (_digestLock)
+            {
+                _remoteDigestCheckpoints[tick] = digest;
+                haveLocal = _localDigestCheckpoints.TryGetValue(tick, out localDigest);
+            }
+
+            if (haveLocal)
+            {
+                VerifyInputDigest(tick, localDigest, digest);
+            }
+        }
+
+        private void VerifyInputDigest(ulong tick, ulong localDigest, ulong remoteDigest)
+        {
+            if (localDigest != remoteDigest)
+            {
+                FailSession(
+                    $"INPUT STREAM MISMATCH tick={tick} localDigest=0x{localDigest:X16} " +
+                    $"remoteDigest=0x{remoteDigest:X16}; P1={FormatInput(_lastP1)} P2={FormatInput(_lastP2)}");
+                return;
+            }
+
+            if ((tick % 600) == 0)
+            {
+                Log($"peer input digest verified tick={tick} digest=0x{localDigest:X16}");
+            }
+        }
+
+        private static string FormatInput(GamepadInput input) =>
+            $"btn=0x{(ulong)input.Buttons:X} L=({input.LStick.Dx},{input.LStick.Dy}) " +
+            $"R=({input.RStick.Dx},{input.RStick.Dy})";
+
         private static GamepadInput Neutral(PlayerIndex player) => new() { PlayerId = player };
 
         private static bool InputsEqual(GamepadInput left, GamepadInput right) =>
@@ -1401,6 +1499,11 @@ namespace Ryujinx.Input.HLE.SmashSync
             Hash(_tick);
             HashInput(p1);
             HashInput(p2);
+
+            if (_mode == SmashSyncMode.Netplay && (_tick % 60) == 0)
+            {
+                PublishInputDigestCheckpoint();
+            }
         }
 
         private void LogDigest(string context)
@@ -1434,6 +1537,12 @@ namespace Ryujinx.Input.HLE.SmashSync
             lock (_remoteLock)
             {
                 foreach (ulong key in _remoteHistory.Keys.Where(x => x < keep).ToArray()) _remoteHistory.Remove(key);
+            }
+
+            lock (_digestLock)
+            {
+                foreach (ulong key in _localDigestCheckpoints.Keys.Where(x => x < keep).ToArray()) _localDigestCheckpoints.Remove(key);
+                foreach (ulong key in _remoteDigestCheckpoints.Keys.Where(x => x < keep).ToArray()) _remoteDigestCheckpoints.Remove(key);
             }
         }
 
