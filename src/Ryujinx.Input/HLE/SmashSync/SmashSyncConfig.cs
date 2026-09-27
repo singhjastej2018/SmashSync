@@ -23,7 +23,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         public int LocalPort { get; set; } = 27888;
         public int PeerPort { get; set; } = 27888;
         public int SyncHz { get; set; } = 60;
-        public int InputDelayTicks { get; set; } = 2;
+        public int InputDelayTicks { get; set; } = 1;
         public int LockstepTimeoutMs { get; set; } = 5000;
         public int HandshakeTimeoutMs { get; set; } = 30000;
         public int Redundancy { get; set; } = 3;
