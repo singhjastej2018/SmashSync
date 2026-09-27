@@ -14,6 +14,13 @@ using Ryujinx.HLE.Loaders.Processes;
 using Ryujinx.HLE.UI;
 using Ryujinx.Memory;
 using System;
+using LibHac;
+using LibHac.Fs;
+using LibHac.Fs.Shim;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Ryujinx.HLE
 {
@@ -171,6 +178,100 @@ namespace Ryujinx.HLE
         public void DisarmApplicationStartPause()
         {
             Configuration.SuspendApplicationOnStart = false;
+        }
+
+        public ulong GetActiveApplicationStateFingerprint()
+        {
+            ulong programId = Processes.ActiveApplication?.ProgramId ?? 0UL;
+            string version = Processes.ActiveApplication?.DisplayVersion ?? string.Empty;
+
+            using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+
+            static void AddText(IncrementalHash destination, string value)
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
+                destination.AppendData(bytes);
+                destination.AppendData(new byte[] { 0 });
+            }
+
+            AddText(hash, programId.ToString("x16"));
+            AddText(hash, version);
+            AddText(hash, Configuration.SystemLanguage.ToString());
+            AddText(hash, Configuration.Region.ToString());
+            AddText(hash, Configuration.EnableDockedMode ? "docked" : "handheld");
+
+            try
+            {
+                HorizonClient client = System.LibHacHorizonManager.FsClient;
+                var accountUserId = System.AccountManager.LastOpenedUser.UserId;
+                LibHac.Fs.UserId userId = new((ulong)accountUserId.High, (ulong)accountUserId.Low);
+
+                SaveDataFilter filter = SaveDataFilter.Make(
+                    programId: default,
+                    saveType: SaveDataType.Account,
+                    userId,
+                    saveDataId: default,
+                    index: default);
+
+                using UniqueRef<SaveDataIterator> iterator = new();
+                client.Fs.OpenSaveDataIterator(ref iterator.Ref, SaveDataSpaceId.User, in filter).ThrowIfFailure();
+
+                Span<SaveDataInfo> infos = stackalloc SaveDataInfo[16];
+                List<ulong> saveIds = [];
+
+                while (true)
+                {
+                    iterator.Get.ReadSaveDataInfo(out long readCount, infos).ThrowIfFailure();
+                    if (readCount == 0)
+                    {
+                        break;
+                    }
+
+                    for (int i = 0; i < readCount; i++)
+                    {
+                        SaveDataInfo info = infos[i];
+                        if (info.ProgramId.Value == programId)
+                        {
+                            saveIds.Add(info.SaveDataId);
+                        }
+                    }
+                }
+
+                foreach (ulong saveId in saveIds.OrderBy(id => id))
+                {
+                    AddText(hash, $"save:{saveId:x16}");
+
+                    string saveRoot = Path.Combine(VirtualFileSystem.GetNandPath(), $"user/save/{saveId:x16}");
+                    if (!Directory.Exists(saveRoot))
+                    {
+                        AddText(hash, "missing");
+                        continue;
+                    }
+
+                    foreach (string file in Directory.EnumerateFiles(saveRoot, "*", SearchOption.AllDirectories)
+                        .OrderBy(path => path, StringComparer.Ordinal))
+                    {
+                        string relative = Path.GetRelativePath(saveRoot, file).Replace('\\', '/');
+                        AddText(hash, relative);
+
+                        using FileStream stream = new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                        byte[] buffer = new byte[64 * 1024];
+                        int read;
+                        while ((read = stream.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            hash.AppendData(buffer, 0, read);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning?.Print(LogClass.Application, $"SmashSync: could not fingerprint active save data: {ex.Message}");
+                AddText(hash, "save-fingerprint-error");
+            }
+
+            byte[] digest = hash.GetHashAndReset();
+            return BitConverter.ToUInt64(digest, 0);
         }
 
         public void SetVolume(float volume) => AudioDeviceDriver.Volume = Math.Clamp(volume, 0f, 1f);
