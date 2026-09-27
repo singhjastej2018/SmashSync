@@ -87,6 +87,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private readonly object _remoteLock = new();
         private readonly object _sendLock = new();
         private readonly object _clockLock = new();
+        private readonly HashSet<long> _pendingClockSyncRequests = [];
         private readonly Dictionary<ulong, GamepadInput> _localHistory = [];
         private readonly Dictionary<ulong, GamepadInput> _remoteHistory = [];
         private readonly Dictionary<ulong, ReplayFrame> _replay = [];
@@ -310,7 +311,15 @@ namespace Ryujinx.Input.HLE.SmashSync
                         if (now - _lastClockSyncSendMs >= ClockSyncIntervalMs)
                         {
                             long t1Ns = MonotonicNowNs();
-                            SendControl(PacketType.ClockSyncRequest, t1Ns, 0);
+                            lock (_clockLock)
+                            {
+                                _pendingClockSyncRequests.Add(t1Ns);
+                                if (_pendingClockSyncRequests.Count > 64)
+                                {
+                                    _pendingClockSyncRequests.Remove(_pendingClockSyncRequests.Min());
+                                }
+                            }
+                            SendControl(PacketType.ClockSyncRequest, t1Ns, _lobbyToken);
                             _lastClockSyncSendMs = now;
                         }
 
@@ -338,7 +347,7 @@ namespace Ryujinx.Input.HLE.SmashSync
 
                         if (_sessionId != 0 && !_startAckReceived && now - _lastStartSendMs >= 50)
                         {
-                            SendControl(PacketType.Start, _sessionId, 0);
+                            SendControl(PacketType.Start, _sessionId, _lobbyToken);
                             _lastStartSendMs = now;
                         }
 
@@ -387,7 +396,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     {
                         if (now - _lastStartSendMs >= 50)
                         {
-                            SendControl(PacketType.StartAck, _sessionId, 0);
+                            SendControl(PacketType.StartAck, _sessionId, _lobbyToken);
                             _lastStartSendMs = now;
                         }
 
@@ -490,6 +499,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     _clockSamples = 0;
                     _clockBestRttNs = long.MaxValue;
                     _clockOffsetNs = 0;
+                    _pendingClockSyncRequests.Clear();
                 }
                 _tick = 0;
                 _nextTickStamp = Stopwatch.GetTimestamp();
@@ -871,7 +881,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                             }
                             break;
                         case PacketType.Start:
-                            if (LocalPlayerIndex == 1 && session != 0)
+                            if (LocalPlayerIndex == 1 && session != 0 && stamp == _lobbyToken)
                             {
                                 _sessionId = session;
                                 if (!_startReceived) Log($"received START session={session}");
@@ -879,14 +889,14 @@ namespace Ryujinx.Input.HLE.SmashSync
                             }
                             break;
                         case PacketType.StartAck:
-                            if (LocalPlayerIndex == 0 && session == _sessionId)
+                            if (LocalPlayerIndex == 0 && session == _sessionId && stamp == _lobbyToken)
                             {
                                 if (!_startAckReceived) Log($"received START_ACK session={session}");
                                 _startAckReceived = true;
                             }
                             break;
                         case PacketType.ClockSyncRequest:
-                            if (LocalPlayerIndex == 1 && session > 0)
+                            if (LocalPlayerIndex == 1 && session > 0 && stamp == _lobbyToken)
                             {
                                 long p2ReceiveNs = MonotonicNowNs();
                                 SendClockSyncResponse(session, p2ReceiveNs);
@@ -895,6 +905,17 @@ namespace Ryujinx.Input.HLE.SmashSync
                         case PacketType.ClockSyncResponse:
                             if (LocalPlayerIndex == 0 && session > 0 && stamp > 0 && length >= ClockSyncPacketSize)
                             {
+                                bool matchedRequest;
+                                lock (_clockLock)
+                                {
+                                    matchedRequest = _pendingClockSyncRequests.Remove(session);
+                                }
+
+                                if (!matchedRequest)
+                                {
+                                    break;
+                                }
+
                                 long p1ReceiveNs = MonotonicNowNs();
                                 long p2SendNs = BinaryPrimitives.ReadInt64LittleEndian(data[HeaderSize..]);
 
