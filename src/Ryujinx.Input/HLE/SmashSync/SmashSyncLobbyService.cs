@@ -73,6 +73,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         public static int RemotePlayer => LocalPlayer == 1 ? 2 : 1;
         public static string PeerAddress => _config?.PeerAddress ?? "";
         public static int Port => _config?.LocalPort ?? 27888;
+        public static int HandshakeTimeoutMs => _config?.HandshakeTimeoutMs ?? 30000;
         public static string LastError => _lastError;
 
         public static string StatusText
@@ -273,7 +274,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             }
         }
 
-        internal static void SendAuthoritativeSave(string titleId, byte[] archive)
+        public static void SendAuthoritativeSave(string titleId, byte[] archive)
         {
             if (LocalPlayer != 1 || !IsConnected)
             {
@@ -321,7 +322,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             Log($"authoritative P1 save sent title={titleId} bytes={archive.Length} sha256={sha[..16]}...");
         }
 
-        internal static bool WaitForAuthoritativeSave(string titleId, int timeoutMs, out byte[] archive)
+        public static bool WaitForAuthoritativeSave(string titleId, int timeoutMs, out byte[] archive)
         {
             archive = null;
 
