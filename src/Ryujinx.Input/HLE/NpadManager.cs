@@ -101,6 +101,7 @@ namespace Ryujinx.Input.HLE
         public bool SmashSyncPauseRequested => _smashSync?.PauseRequested == true;
         public bool SmashSyncResumeRequested => _smashSync?.ResumeRequested == true;
         public bool SmashSyncOwnsPause => _smashSync?.OwnsPause == true;
+        public bool SmashSyncCanAdoptExistingPause => _smashSync?.CanAdoptExistingPause == true;
 
         public void NotifySmashSyncPaused() => _smashSync?.NotifyPaused();
         public void WaitForSmashSyncResumeEpoch() => _smashSync?.WaitForResumeEpoch();
