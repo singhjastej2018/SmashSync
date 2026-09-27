@@ -1040,8 +1040,11 @@ namespace Ryujinx.Ava.Systems
                 _ => new OpenGLRenderer()
             };
 
-            // Initialize Configuration.
-            Device = new Switch(ConfigurationState.Instance.CreateHleConfiguration()
+            // Initialize Configuration. For an accepted SmashSync session,
+            // arm the synchronized-start pause before Switch construction so the
+            // guest tick source is frozen from its earliest usable instant.
+            HleConfiguration hleConfiguration = ConfigurationState.Instance.CreateHleConfiguration()
+                .ConfigureSynchronizedStartPause(SmashSyncLobbyService.NetplayEnabled && SmashSyncLobbyService.IsConnected)
                 .Configure(
                     VirtualFileSystem,
                     _viewModel.LibHacHorizonManager,
@@ -1051,8 +1054,9 @@ namespace Ryujinx.Ava.Systems
                     renderer.TryMakeThreaded(ConfigurationState.Instance.Graphics.BackendThreading),
                     InitializeAudio(),
                     _viewModel.UiHandler
-                )
-            );
+                );
+
+            Device = new Switch(hleConfiguration);
         }
 
         private static IHardwareDeviceDriver InitializeAudio()
