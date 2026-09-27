@@ -27,36 +27,9 @@ jobs:
       - name: Build required Ryujinx.LibHac package
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force vendor/runtime | Out-Null
+          git clone --depth 1 https://github.com/sinjunyoung/NSW.M2.git vendor/NSW.M2
           New-Item -ItemType Directory -Force vendor-packages | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/Leuconoe/Ryubing/releases/download/mcp-bridge-v0.2.0/Ryubing-MCP-Bridge-v0.2.0-win-x64.zip" -OutFile vendor/ryubing-runtime.zip
-          Expand-Archive vendor/ryubing-runtime.zip -DestinationPath vendor/runtime -Force
-          $libHac = Get-ChildItem vendor/runtime -Recurse -Filter LibHac.dll | Select-Object -First 1
-          if (-not $libHac) {
-            Write-Host "Archive contents:"
-            Get-ChildItem vendor/runtime -Recurse | Select-Object -ExpandProperty FullName
-            throw "LibHac.dll was not found in the reference Ryubing release."
-          }
-
-          New-Item -ItemType Directory -Force vendor/LibHacPackage/lib/net10.0 | Out-Null
-          Copy-Item $libHac.FullName vendor/LibHacPackage/lib/net10.0/LibHac.dll
-
-          @'
-          <?xml version="1.0"?>
-          <package>
-            <metadata>
-              <id>Ryujinx.LibHac</id>
-              <version>0.21.0-alpha.133</version>
-              <authors>Ryubing/LibHac contributors</authors>
-              <description>Build-time compatibility package extracted from the public Ryubing Windows release.</description>
-            </metadata>
-            <files>
-              <file src="lib\\net10.0\\LibHac.dll" target="lib\\net10.0" />
-            </files>
-          </package>
-          '@ | Set-Content vendor/LibHacPackage/Ryujinx.LibHac.nuspec
-
-          nuget pack vendor/LibHacPackage/Ryujinx.LibHac.nuspec -OutputDirectory vendor-packages
+          dotnet pack vendor/NSW.M2/LibHac/LibHac.csproj -c Release -o vendor-packages -p:PackageId=Ryujinx.LibHac -p:PackageVersion=0.21.0-alpha.133
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Restore Windows x64
