@@ -210,6 +210,12 @@ namespace Ryujinx.HLE
         public bool DebuggerSuspendOnStart { internal get; set; }
 
         /// <summary>
+        /// Suspend the application main thread with the normal process-pause flag
+        /// before it begins executing. Used by synchronized launch barriers.
+        /// </summary>
+        public bool SuspendApplicationOnStart { internal get; set; }
+
+        /// <summary>
         ///     The desired hacky workarounds.
         /// </summary>
         /// <remarks>This cannot be changed after <see cref="Switch"/> instantiation.</remarks>
