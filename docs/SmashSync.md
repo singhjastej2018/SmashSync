@@ -96,7 +96,7 @@ A game launch is blocked while Netplay mode is enabled but the pre-game peer han
 
 Both PCs still run SSBU locally. SmashSync does not remotely execute programs on the other PC.
 
-Either player may launch SSBU first. The first instance automatically enters a SmashSync-owned pause once the game-side input session is initialized and waits for the other machine to launch.
+Either player may launch SSBU first. The first instance automatically enters a SmashSync-owned pause once the game-side input session is initialized and waits for the other machine to launch. There is no fixed game-loading deadline for an accepted lobby session: the faster machine remains paused until the slower peer is ready, or until the lobby actually disconnects.
 
 P1 is authoritative for persistent SSBU save data during the session. While both guests are still paused, P1 packages its active SSBU account save and transfers it over the TCP lobby connection. P2 temporarily installs that copy before its application main thread is released. P2's original local save is backed up and restored when the SmashSync session ends; interrupted-session recovery is also supported.
 
