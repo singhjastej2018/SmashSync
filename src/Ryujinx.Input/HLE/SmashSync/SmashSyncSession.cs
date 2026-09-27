@@ -16,7 +16,7 @@ namespace Ryujinx.Input.HLE.SmashSync
     internal sealed class SmashSyncSession : IDisposable
     {
         private const uint Magic = 0x504E5353; // SSNP
-        private const byte Version = 1;
+        private const byte Version = 2;
         private const int HeaderSize = 32;
         private const int RecordSize = 32;
         private const int MaxRedundancy = 3;
