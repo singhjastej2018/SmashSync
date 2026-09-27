@@ -27,8 +27,7 @@ jobs:
       - name: Build required Ryujinx.LibHac package
         shell: pwsh
         run: |
-          git clone --filter=blob:none https://gitlab.com/ryujinx-classic/LibHac.git vendor/LibHac
-          git -C vendor/LibHac checkout e39169ab5053ff179b7fef38f624dfc608d2596c
+          git clone --depth 1 https://gitlab.com/ryujinx-classic/LibHac.git vendor/LibHac
           $project = Get-ChildItem vendor/LibHac -Filter *.csproj -Recurse |
             Where-Object { $_.Name -eq 'LibHac.csproj' } |
             Select-Object -First 1
