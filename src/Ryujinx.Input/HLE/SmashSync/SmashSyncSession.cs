@@ -131,6 +131,9 @@ namespace Ryujinx.Input.HLE.SmashSync
         private long _barrierEnteredMs;
         private long _lastRetransmitMs;
         private long _lockstepStallStartedMs;
+        private long _lockstepStallTotalMs;
+        private int _lockstepStallCount;
+        private long _runningStartedNs;
         private long _lastClockSyncSendMs;
         private long _clockSyncStartedMs;
         private long _lastEpochSendMs;
@@ -445,6 +448,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                     if (_lockstepStallStartedMs == 0)
                     {
                         _lockstepStallStartedMs = now;
+                        _lockstepStallCount++;
                     }
 
                     if (now - _lockstepStallStartedMs > _config.LockstepTimeoutMs)
@@ -466,7 +470,12 @@ namespace Ryujinx.Input.HLE.SmashSync
                 }
                 else
                 {
-                    _lockstepStallStartedMs = 0;
+                    if (_lockstepStallStartedMs != 0)
+                    {
+                        _lockstepStallTotalMs += Math.Max(0, now - _lockstepStallStartedMs);
+                        _lockstepStallStartedMs = 0;
+                    }
+
                     if (_ownsPause)
                     {
                         _pauseRequested = false;
@@ -573,6 +582,9 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _state = RunState.Running;
                 _tick = 0;
                 _lockstepStallStartedMs = 0;
+                _lockstepStallTotalMs = 0;
+                _lockstepStallCount = 0;
+                _runningStartedNs = MonotonicNowNs();
                 _localHistory.Clear();
                 lock (_remoteLock) _remoteHistory.Clear();
 
@@ -704,6 +716,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                         if (_lockstepStallStartedMs == 0)
                         {
                             _lockstepStallStartedMs = Environment.TickCount64;
+                            _lockstepStallCount++;
                         }
                         _pauseRequested = true;
                         if (_haveLastCombined)
@@ -721,7 +734,11 @@ namespace Ryujinx.Input.HLE.SmashSync
                 }
             }
 
-            _lockstepStallStartedMs = 0;
+            if (_lockstepStallStartedMs != 0)
+            {
+                _lockstepStallTotalMs += Math.Max(0, Environment.TickCount64 - _lockstepStallStartedMs);
+                _lockstepStallStartedMs = 0;
+            }
 
             GamepadInput p1 = LocalPlayerIndex == 0 ? local : remote;
             GamepadInput p2 = LocalPlayerIndex == 1 ? local : remote;
@@ -738,7 +755,14 @@ namespace Ryujinx.Input.HLE.SmashSync
             if ((_tick % 60) == 0)
             {
                 SendPing();
-                LogDigest($"netplay rttMs={_lastRttMs:F2}");
+
+                long runningNs = _runningStartedNs > 0 ? Math.Max(1, MonotonicNowNs() - _runningStartedNs) : 1;
+                double effectiveHz = _tick == 0 ? _config.SyncHz : _tick * 1_000_000_000.0 / runningNs;
+
+                LogDigest(
+                    $"netplay rttMs={_lastRttMs:F2} delay={_effectiveInputDelayTicks} " +
+                    $"effectiveHz={effectiveHz:F2} stalls={_lockstepStallCount} stallMs={_lockstepStallTotalMs}");
+
                 Trim();
             }
 
