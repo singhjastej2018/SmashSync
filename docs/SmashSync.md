@@ -176,3 +176,8 @@ Gameplay input ticks are immutable once assigned. Retransmission never resamples
 Incoming ticks are bounded to a small window around the current logical tick, startup/control packets are bound to the accepted TCP lobby nonce, runtime lockstep stalls honor `LockstepTimeoutMs`, and SmashSync never takes ownership of an unrelated manual emulator pause.
 
 The guest tick source is instance-local and internally synchronized so concurrent guest-time reads cannot mutate shared static timing state.
+
+
+## Runtime pacing diagnostics
+
+Every 60 logical ticks, netplay logging includes the negotiated delay, measured RTT, effective logical tick rate, number of lockstep stalls, and cumulative stall milliseconds. A healthy 60 Hz session should converge near `effectiveHz=60` with stall time remaining close to zero. If network latency or jitter exceeds the startup buffer, SmashSync still pauses rather than advancing either peer on a different input stream.
