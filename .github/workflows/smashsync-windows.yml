@@ -39,6 +39,8 @@ jobs:
             ConvertTo-Json -Depth 3 |
             Set-Content vendor/NSW.M2/global.json
           Push-Location vendor/NSW.M2
+          dotnet pack NSW.Utils/NSW.Utils.csproj -c Release -o ../../vendor-packages
+          if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
           dotnet pack LibHac/LibHac.csproj -c Release -o ../../vendor-packages -p:PackageVersion=0.21.0-alpha.133
           $packExit = $LASTEXITCODE
           Pop-Location
