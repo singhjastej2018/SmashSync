@@ -533,14 +533,15 @@ namespace Ryujinx.Input.HLE
                         // SmashSync's logical tick is the canonical HID sampling
                         // number. This prevents machine-local pre-session HID history
                         // from giving P1/P2 different sample-number timelines.
-                        _device.Hid.Npads.UpdateSmashSync(_hleInputStates, _smashSync.SharedTick);
+                        ulong sharedSamplingNumber = _smashSync.SharedTick;
+                        _device.Hid.Npads.UpdateSmashSync(_hleInputStates, sharedSamplingNumber);
+                        _device.Hid.Npads.UpdateSixAxisSmashSync(_hleMotionStates, sharedSamplingNumber);
                     }
                     else
                     {
                         _device.Hid.Npads.Update(_hleInputStates);
+                        _device.Hid.Npads.UpdateSixAxis(_hleMotionStates);
                     }
-
-                    _device.Hid.Npads.UpdateSixAxis(_hleMotionStates);
                 }
 
                 if (hleKeyboardInput.HasValue)
