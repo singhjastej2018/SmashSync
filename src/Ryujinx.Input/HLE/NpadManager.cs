@@ -103,7 +103,18 @@ namespace Ryujinx.Input.HLE
         public bool SmashSyncOwnsPause => _smashSync?.OwnsPause == true;
         public bool SmashSyncCanAdoptExistingPause => _smashSync?.CanAdoptExistingPause == true;
 
-        public void NotifySmashSyncPaused() => _smashSync?.NotifyPaused();
+        public void NotifySmashSyncPaused()
+        {
+            bool startupBarrier = _smashSync?.CanAdoptExistingPause == true;
+
+            if (startupBarrier && _device != null)
+            {
+                ConfigureSmashSyncControllers();
+                _device.Hid.Npads.ResetSmashSyncInputHistory();
+            }
+
+            _smashSync?.NotifyPaused();
+        }
         public void WaitForSmashSyncResumeEpoch() => _smashSync?.WaitForResumeEpoch();
         public void NotifySmashSyncResumeDispatch() => _smashSync?.NotifyResumeDispatch();
         public void NotifySmashSyncResumed() => _smashSync?.NotifyResumed();
@@ -517,7 +528,18 @@ namespace Ryujinx.Input.HLE
                 // ticks must not increment the guest Npad sampling number.
                 if (commitGuestHid)
                 {
-                    _device.Hid.Npads.Update(_hleInputStates);
+                    if (_smashSync?.CanonicalRouting == true)
+                    {
+                        // SmashSync's logical tick is the canonical HID sampling
+                        // number. This prevents machine-local pre-session HID history
+                        // from giving P1/P2 different sample-number timelines.
+                        _device.Hid.Npads.UpdateSmashSync(_hleInputStates, _smashSync.SharedTick);
+                    }
+                    else
+                    {
+                        _device.Hid.Npads.Update(_hleInputStates);
+                    }
+
                     _device.Hid.Npads.UpdateSixAxis(_hleMotionStates);
                 }
 
