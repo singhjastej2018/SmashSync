@@ -8,6 +8,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Threading;
 
@@ -16,7 +17,7 @@ namespace Ryujinx.Input.HLE.SmashSync
     internal sealed class SmashSyncSession : IDisposable
     {
         private const uint Magic = 0x504E5353; // SSNP
-        private const byte Version = 2;
+        private const byte Version = 3;
         private const int HeaderSize = 32;
         private const int RecordSize = 32;
         private const int MaxRedundancy = 3;
@@ -24,6 +25,8 @@ namespace Ryujinx.Input.HLE.SmashSync
         private const int ClockSyncMaxWaitMs = 750;
         private const int ClockSyncIntervalMs = 20;
         private const int EpochLeadMs = 500;
+        private const ulong MaxRemoteTickLead = 512;
+        private const int ReleaseMinLeadMs = 10;
         private const int ClockSyncPacketSize = HeaderSize + 8;
         private const int EpochPacketSize = HeaderSize + 8;
 
@@ -105,10 +108,10 @@ namespace Ryujinx.Input.HLE.SmashSync
         private volatile bool _epochReceived;
         private volatile bool _epochAckReceived;
 
-        private RunState _state;
-        private bool _pauseRequested;
-        private bool _resumeRequested;
-        private bool _ownsPause;
+        private volatile RunState _state;
+        private volatile bool _pauseRequested;
+        private volatile bool _resumeRequested;
+        private volatile bool _ownsPause;
         private long _sessionId;
         private uint _sendInputSequence;
         private uint _sendControlSequence;
@@ -125,6 +128,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private long _barrierEnteredMs;
         private long _resumeTargetStamp;
         private long _lastRetransmitMs;
+        private long _lockstepStallStartedMs;
         private long _lastClockSyncSendMs;
         private long _clockSyncStartedMs;
         private long _lastEpochSendMs;
@@ -137,6 +141,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         private ulong _localStateFingerprint;
         private ulong _remoteStateFingerprint;
         private bool _stateFingerprintReady;
+        private readonly long _lobbyToken;
         private readonly long _tickInterval;
         private readonly long _tickIntervalNs;
         private long _nextTickStamp;
@@ -153,6 +158,7 @@ namespace Ryujinx.Input.HLE.SmashSync
         public bool PauseRequested => _pauseRequested;
         public bool ResumeRequested => _resumeRequested;
         public bool OwnsPause => _ownsPause;
+        public bool CanAdoptExistingPause => _state == RunState.PausingForReady;
         public ulong SharedTick => _tick;
         public bool CanonicalRouting => _mode == SmashSyncMode.Netplay && SmashSyncLobbyService.IsConnected;
         public PlayerIndex CanonicalLocalPlayer => (PlayerIndex)LocalPlayerIndex;
@@ -171,6 +177,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             _tickIntervalNs = Math.Max(1, 1_000_000_000L / _config.SyncHz);
             _nextTickStamp = Stopwatch.GetTimestamp();
             SmashSyncLobbyService.Initialize();
+            _lobbyToken = SmashSyncLobbyService.ConnectionToken;
             bool preGameAccepted = _mode == SmashSyncMode.Netplay && SmashSyncLobbyService.IsConnected;
 
             _state = preGameAccepted
@@ -261,31 +268,34 @@ namespace Ryujinx.Input.HLE.SmashSync
 
             if (!_peerHello && now - _lastHelloSendMs >= 250)
             {
-                SendControl(PacketType.Hello, 0, 0);
+                SendControl(PacketType.Hello, _lobbyToken, 0);
                 _lastHelloSendMs = now;
             }
 
             if (_state == RunState.ReadyBarrier)
             {
+                if (_barrierEnteredMs != 0 && now - _barrierEnteredMs > _config.HandshakeTimeoutMs)
+                {
+                    FailSession($"startup barrier timed out after {_config.HandshakeTimeoutMs} ms; keeping guest paused");
+                    return;
+                }
+
                 if (now - _lastReadySendMs >= 100)
                 {
-                    SendControl(PacketType.Ready, _sessionId, 0);
+                    SendControl(PacketType.Ready, _lobbyToken, 0);
                     _lastReadySendMs = now;
                 }
 
                 if (_stateFingerprintReady && now - _lastStateFingerprintSendMs >= 100)
                 {
-                    SendControl(PacketType.StateFingerprint, 0, unchecked((long)_localStateFingerprint));
+                    SendControl(PacketType.StateFingerprint, _lobbyToken, unchecked((long)_localStateFingerprint));
                     _lastStateFingerprintSendMs = now;
                 }
 
                 if (_stateFingerprintReceived && _stateFingerprintReady &&
                     _remoteStateFingerprint != _localStateFingerprint)
                 {
-                    _state = RunState.Failed;
-                    _pauseRequested = false;
-                    _resumeRequested = false;
-                    Log($"START STATE MISMATCH local=0x{_localStateFingerprint:x16} remote=0x{_remoteStateFingerprint:x16}; keeping guest paused");
+                    FailSession($"START STATE MISMATCH local=0x{_localStateFingerprint:x16} remote=0x{_remoteStateFingerprint:x16}; keeping guest paused");
                     return;
                 }
 
@@ -322,8 +332,7 @@ namespace Ryujinx.Input.HLE.SmashSync
 
                         if (_sessionId == 0 && clockReady)
                         {
-                            _sessionId = DateTime.UtcNow.Ticks ^ Stopwatch.GetTimestamp() ^ Environment.ProcessId;
-                            if (_sessionId == 0) _sessionId = 1;
+                            _sessionId = CreateSessionId();
 
                             double bestRttMs = bestRttNs == long.MaxValue ? 0 : bestRttNs / 1_000_000.0;
                             Log($"shared clock locked samples={samples} bestRttMs={bestRttMs:F3} p2MinusP1Ms={offsetNs / 1_000_000.0:F3}; session={_sessionId}");
@@ -363,7 +372,16 @@ namespace Ryujinx.Input.HLE.SmashSync
 
                             if (_epochAckReceived)
                             {
-                                RequestResumeFromBarrier();
+                                if (!_releaseAckReceived && now - _lastReleaseSendMs >= 20)
+                                {
+                                    SendControl(PacketType.Release, _sessionId, _sharedEpochP1Ns);
+                                    _lastReleaseSendMs = now;
+                                }
+
+                                if (_releaseAckReceived)
+                                {
+                                    RequestResumeFromBarrier();
+                                }
                             }
                         }
                     }
@@ -375,7 +393,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                             _lastStartSendMs = now;
                         }
 
-                        if (_epochReceived)
+                        if (_epochReceived && _releaseReceived)
                         {
                             RequestResumeFromBarrier();
                         }
@@ -384,6 +402,15 @@ namespace Ryujinx.Input.HLE.SmashSync
             }
             else if (_state == RunState.Running && IsTickDue() && _tick >= (ulong)_config.InputDelayTicks)
             {
+                // Never stall before the local input for this logical tick has been
+                // captured and transmitted. This is required for zero-delay mode:
+                // otherwise both peers can pause on tick 0 before either sends it.
+                bool haveLocal = _localHistory.ContainsKey(_tick);
+                if (!haveLocal)
+                {
+                    return;
+                }
+
                 bool haveRemote;
                 lock (_remoteLock)
                 {
@@ -392,21 +419,36 @@ namespace Ryujinx.Input.HLE.SmashSync
 
                 if (!haveRemote)
                 {
+                    if (_lockstepStallStartedMs == 0)
+                    {
+                        _lockstepStallStartedMs = now;
+                    }
+
+                    if (now - _lockstepStallStartedMs > _config.LockstepTimeoutMs)
+                    {
+                        FailSession($"remote input tick {_tick} timed out after {_config.LockstepTimeoutMs} ms");
+                        return;
+                    }
+
                     _pauseRequested = true;
 
                     // If both sides paused because the same UDP input was lost,
                     // there may be no newer packet to carry a redundant copy.
-                    // Retransmit this exact logical tick while the barrier is held.
-                    if (now - _lastRetransmitMs >= 4 && _localHistory.ContainsKey(_tick))
+                    // Retransmit this exact immutable logical tick while held.
+                    if (now - _lastRetransmitMs >= 4)
                     {
                         SendInputs(_tick);
                         _lastRetransmitMs = now;
                     }
                 }
-                else if (_ownsPause)
+                else
                 {
-                    _pauseRequested = false;
-                    _resumeRequested = true;
+                    _lockstepStallStartedMs = 0;
+                    if (_ownsPause)
+                    {
+                        _pauseRequested = false;
+                        _resumeRequested = true;
+                    }
                 }
             }
         }
@@ -443,7 +485,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _clockSyncStartedMs = 0;
                 _lastEpochSendMs = 0;
                 _barrierEnteredMs = Environment.TickCount64;
-                _resumeTargetStamp = 0;
+                _lockstepStallStartedMs = 0;
                 _sharedEpochP1Ns = 0;
                 _localEpochNs = 0;
                 lock (_clockLock)
@@ -459,7 +501,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _haveLastCombined = true;
                 _localHistory.Clear();
                 lock (_remoteLock) _remoteHistory.Clear();
-                SendControl(PacketType.Ready, 0, 0);
+                SendControl(PacketType.Ready, _lobbyToken, 0);
                 Log("local READY: emulation paused at synchronization barrier");
             }
         }
@@ -506,6 +548,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             {
                 _state = RunState.Running;
                 _tick = 0;
+                _lockstepStallStartedMs = 0;
                 _localHistory.Clear();
                 lock (_remoteLock) _remoteHistory.Clear();
 
@@ -600,7 +643,19 @@ namespace Ryujinx.Input.HLE.SmashSync
 
             ulong targetTick = _tick + (ulong)_config.InputDelayTicks;
             physicalLocal.PlayerId = localPlayer;
-            _localHistory[targetTick] = physicalLocal;
+
+            // A logical input becomes immutable the first time it is assigned.
+            // Host-loop retries during a network stall must never rewrite a tick
+            // that may already have reached the peer.
+            if (!_localHistory.TryGetValue(targetTick, out GamepadInput frozenLocal))
+            {
+                _localHistory[targetTick] = physicalLocal;
+            }
+            else
+            {
+                physicalLocal = frozenLocal;
+            }
+
             SendInputs(targetTick);
 
             GamepadInput local = _localHistory.TryGetValue(_tick, out GamepadInput scheduled)
@@ -618,6 +673,10 @@ namespace Ryujinx.Input.HLE.SmashSync
                 {
                     if (!_remoteHistory.TryGetValue(_tick, out remote))
                     {
+                        if (_lockstepStallStartedMs == 0)
+                        {
+                            _lockstepStallStartedMs = Environment.TickCount64;
+                        }
                         _pauseRequested = true;
                         if (_haveLastCombined)
                         {
@@ -633,6 +692,8 @@ namespace Ryujinx.Input.HLE.SmashSync
                     }
                 }
             }
+
+            _lockstepStallStartedMs = 0;
 
             GamepadInput p1 = LocalPlayerIndex == 0 ? local : remote;
             GamepadInput p2 = LocalPlayerIndex == 1 ? local : remote;
@@ -702,9 +763,6 @@ namespace Ryujinx.Input.HLE.SmashSync
                 LogDigest("replay");
             }
         }
-
-        private static long MillisecondsToStopwatchTicks(double milliseconds) =>
-            (long)(milliseconds * Stopwatch.Frequency / 1000.0);
 
         private static long MonotonicNowNs()
         {
@@ -802,12 +860,18 @@ namespace Ryujinx.Input.HLE.SmashSync
                     switch (type)
                     {
                         case PacketType.Hello:
-                            if (!_peerHello) Log($"received HELLO from P{player + 1}");
-                            _peerHello = true;
+                            if (session == _lobbyToken && player == RemotePlayerIndex)
+                            {
+                                if (!_peerHello) Log($"received HELLO from P{player + 1}");
+                                _peerHello = true;
+                            }
                             break;
                         case PacketType.Ready:
-                            if (!_peerReady) Log($"received READY from P{player + 1}");
-                            _peerReady = true;
+                            if (session == _lobbyToken && player == RemotePlayerIndex)
+                            {
+                                if (!_peerReady) Log($"received READY from P{player + 1}");
+                                _peerReady = true;
+                            }
                             break;
                         case PacketType.Start:
                             if (LocalPlayerIndex == 1 && session != 0)
@@ -901,15 +965,53 @@ namespace Ryujinx.Input.HLE.SmashSync
                             }
                             break;
                         case PacketType.Release:
+                            if (LocalPlayerIndex == 1 &&
+                                session == _sessionId &&
+                                stamp == _sharedEpochP1Ns &&
+                                _epochReceived)
+                            {
+                                long remainingNs = _localEpochNs - MonotonicNowNs();
+                                if (remainingNs >= ReleaseMinLeadMs * 1_000_000L)
+                                {
+                                    _releaseReceived = true;
+                                    SendControl(PacketType.ReleaseAck, session, stamp);
+                                    Log($"received RELEASE for shared epoch; resumeInMs={remainingNs / 1_000_000.0:F3}");
+                                }
+                                else
+                                {
+                                    SendControl(PacketType.ReleaseAck, session, 0);
+                                    Log($"rejected late RELEASE remainingMs={remainingNs / 1_000_000.0:F3}");
+                                }
+                            }
+                            break;
                         case PacketType.ReleaseAck:
+                            if (LocalPlayerIndex == 0 && session == _sessionId)
+                            {
+                                if (stamp == _sharedEpochP1Ns && stamp != 0)
+                                {
+                                    _releaseAckReceived = true;
+                                }
+                                else if (stamp == 0)
+                                {
+                                    _releaseAckReceived = false;
+                                    _epochAckReceived = false;
+                                    _sharedEpochP1Ns = 0;
+                                    _localEpochNs = 0;
+                                    _lastEpochSendMs = 0;
+                                    Log("peer rejected late RELEASE; scheduling a new shared epoch");
+                                }
+                            }
                             break;
                         case PacketType.StateFingerprint:
-                            _remoteStateFingerprint = unchecked((ulong)stamp);
-                            if (!_stateFingerprintReceived)
+                            if (session == _lobbyToken && player == RemotePlayerIndex)
                             {
-                                Log($"received start-state fingerprint=0x{_remoteStateFingerprint:x16}");
+                                _remoteStateFingerprint = unchecked((ulong)stamp);
+                                if (!_stateFingerprintReceived)
+                                {
+                                    Log($"received start-state fingerprint=0x{_remoteStateFingerprint:x16}");
+                                }
+                                _stateFingerprintReceived = true;
                             }
-                            _stateFingerprintReceived = true;
                             break;
                         case PacketType.Input:
                             if (session == _sessionId && player == RemotePlayerIndex)
@@ -974,7 +1076,24 @@ namespace Ryujinx.Input.HLE.SmashSync
                             Dy = BinaryPrimitives.ReadInt32LittleEndian(data[(o + 28)..]),
                         },
                     };
-                    _remoteHistory[tick] = remoteInput;
+                    ulong oldestAccepted = _tick > MaxRemoteTickLead ? _tick - MaxRemoteTickLead : 0;
+                    if (tick < oldestAccepted || tick > _tick + MaxRemoteTickLead)
+                    {
+                        continue;
+                    }
+
+                    if (_remoteHistory.TryGetValue(tick, out GamepadInput existing))
+                    {
+                        if (!InputsEqual(existing, remoteInput))
+                        {
+                            FailSession($"conflicting remote input received for immutable tick {tick}");
+                            return;
+                        }
+
+                        continue;
+                    }
+
+                    _remoteHistory.Add(tick, remoteInput);
                     if (i == 0)
                     {
                         SmashSyncLobbyService.UpdateRemoteInput(remoteInput);
@@ -1106,6 +1225,36 @@ namespace Ryujinx.Input.HLE.SmashSync
         }
 
         private static GamepadInput Neutral(PlayerIndex player) => new() { PlayerId = player };
+
+        private static bool InputsEqual(GamepadInput left, GamepadInput right) =>
+            left.Buttons == right.Buttons &&
+            left.LStick.Dx == right.LStick.Dx &&
+            left.LStick.Dy == right.LStick.Dy &&
+            left.RStick.Dx == right.RStick.Dx &&
+            left.RStick.Dy == right.RStick.Dy;
+
+        private static long CreateSessionId()
+        {
+            Span<byte> bytes = stackalloc byte[sizeof(long)];
+            long value;
+
+            do
+            {
+                RandomNumberGenerator.Fill(bytes);
+                value = BinaryPrimitives.ReadInt64LittleEndian(bytes) & long.MaxValue;
+            }
+            while (value == 0);
+
+            return value;
+        }
+
+        private void FailSession(string message)
+        {
+            _state = RunState.Failed;
+            _pauseRequested = true;
+            _resumeRequested = false;
+            Log(message);
+        }
 
         private static void SetPlayer(List<GamepadInput> states, GamepadInput input)
         {
