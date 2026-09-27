@@ -56,7 +56,6 @@ jobs:
           </package>
           '@ | Set-Content vendor/LibHacPackage/Ryujinx.LibHac.nuspec
 
-          dotnet tool install --global NuGet.CommandLine
           nuget pack vendor/LibHacPackage/Ryujinx.LibHac.nuspec -OutputDirectory vendor-packages
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
