@@ -188,3 +188,6 @@ Every 60 logical ticks, netplay logging includes the negotiated delay, measured 
 For synchronized netplay, P1 and P2 controller ring-buffer sampling numbers are derived from the shared SmashSync logical tick rather than each machine's pre-existing local HID history. The P1/P2 button-stick and six-axis ring histories are cleared while the application is paused at the startup barrier, then rebuilt from the same shared sample numbers on both peers.
 
 Every 60 logical ticks, both peers also exchange the cumulative canonical P1+P2 input digest. A mismatch stops the session with `INPUT STREAM MISMATCH` instead of allowing different controller streams to silently drive the two guests apart. This verifies the complete input stream; it still does not by itself prove that all internal SSBU runtime state is identical.
+
+
+During active netplay, host keyboard HID, mouse HID, touchscreen input, and debug-pad sampling are cleared at the startup barrier and then suppressed. Controller mappings may still use a physical keyboard as the local gamepad source, but unsynchronized guest keyboard/mouse/touch devices are not exposed. This prevents local window size or aspect ratio from affecting guest-visible pointer/touch state.
