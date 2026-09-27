@@ -1302,6 +1302,27 @@ namespace Ryujinx.Ava.Systems
                 return false;
             }
 
+            NpadManager.PumpSmashSyncControl();
+
+            if (NpadManager.SmashSyncPauseRequested && !Device.System.IsPaused)
+            {
+                Pause();
+                NpadManager.NotifySmashSyncPaused();
+            }
+
+            if (NpadManager.SmashSyncResumeRequested && NpadManager.SmashSyncOwnsPause && Device.System.IsPaused)
+            {
+                Resume();
+                NpadManager.NotifySmashSyncResumed();
+            }
+
+            // A SmashSync-owned pause is a synchronization barrier. Keep the UI/network
+            // loop alive, but do not advance the host HID tick until the peer is ready.
+            if (Device.System.IsPaused && NpadManager.SmashSyncOwnsPause)
+            {
+                return true;
+            }
+
             if (!_viewModel.IsActive)
             {
                 _inputManager.KeyboardDriver.Clear();
