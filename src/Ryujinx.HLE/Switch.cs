@@ -243,7 +243,7 @@ namespace Ryujinx.HLE
                 {
                     AddText(hash, "save");
 
-                    string saveRoot = Path.Combine(VirtualFileSystem.GetNandPath(), $"user/save/{saveId:x16}");
+                    string saveRoot = System.IO.Path.Combine(VirtualFileSystem.GetNandPath(), $"user/save/{saveId:x16}");
                     if (!Directory.Exists(saveRoot))
                     {
                         AddText(hash, "missing");
@@ -253,7 +253,7 @@ namespace Ryujinx.HLE
                     foreach (string file in Directory.EnumerateFiles(saveRoot, "*", SearchOption.AllDirectories)
                         .OrderBy(path => path, StringComparer.Ordinal))
                     {
-                        string relative = Path.GetRelativePath(saveRoot, file).Replace('\\', '/');
+                        string relative = System.IO.Path.GetRelativePath(saveRoot, file).Replace('\\', '/');
                         AddText(hash, relative);
 
                         using FileStream stream = new(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
