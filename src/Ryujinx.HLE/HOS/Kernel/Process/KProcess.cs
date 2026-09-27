@@ -696,6 +696,13 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
                     Logger.Notice.Print(LogClass.Kernel, $"Application is suspended on start for debugging.");
                 }
 
+                if (KernelContext.Device.Configuration.SuspendApplicationOnStart && IsApplication)
+                {
+                    mainThread.Suspend(ThreadSchedState.ProcessPauseFlag);
+                    IsPaused = true;
+                    Logger.Info?.Print(LogClass.Kernel, "Application is suspended on start for synchronization.");
+                }
+
                 result = mainThread.Start();
 
                 if (result != Result.Success)
