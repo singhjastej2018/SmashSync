@@ -10,6 +10,7 @@ using Ryujinx.Ava.UI.Windows;
 using Ryujinx.Common;
 using Ryujinx.Common.Configuration;
 using Ryujinx.Common.Logging;
+using Ryujinx.Input.HLE.SmashSync;
 using System;
 
 namespace Ryujinx.Ava.UI.Views.Main
@@ -17,10 +18,22 @@ namespace Ryujinx.Ava.UI.Views.Main
     public partial class MainStatusBarView : RyujinxControl<MainWindowViewModel>
     {
         public MainWindow Window;
+        private readonly DispatcherTimer _smashSyncTimer;
 
         public MainStatusBarView()
         {
             InitializeComponent();
+
+            SmashSyncLobbyService.Initialize();
+
+            _smashSyncTimer = new DispatcherTimer
+            {
+                Interval = TimeSpan.FromMilliseconds(250),
+            };
+            _smashSyncTimer.Tick += (_, _) => UpdateSmashSyncStatus();
+            _smashSyncTimer.Start();
+
+            UpdateSmashSyncStatus();
         }
 
         protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
@@ -37,6 +50,59 @@ namespace Ryujinx.Ava.UI.Views.Main
                         Window.LoadApplications();
                 });
             }
+        }
+
+        protected override void OnDetachedFromVisualTree(VisualTreeAttachmentEventArgs e)
+        {
+            _smashSyncTimer.Stop();
+            base.OnDetachedFromVisualTree(e);
+        }
+
+        private void UpdateSmashSyncStatus()
+        {
+            bool enabled = SmashSyncLobbyService.NetplayEnabled;
+
+            SmashSyncPanel.IsVisible = enabled;
+            if (!enabled)
+            {
+                return;
+            }
+
+            SmashSyncStatusText.Text = SmashSyncLobbyService.StatusText;
+
+            bool connected = SmashSyncLobbyService.IsConnected;
+            bool incoming = SmashSyncLobbyService.HasIncomingRequest;
+            bool requesting = SmashSyncLobbyService.State == SmashSyncLobbyState.RequestSent;
+
+            SmashSyncRequestButton.IsVisible = !connected && !incoming;
+            SmashSyncRequestButton.IsEnabled = !requesting;
+            SmashSyncAcceptButton.IsVisible = incoming;
+            SmashSyncRejectButton.IsVisible = incoming;
+            SmashSyncDisconnectButton.IsVisible = connected;
+        }
+
+        private void SmashSyncRequest_OnClick(object sender, RoutedEventArgs e)
+        {
+            SmashSyncLobbyService.RequestConnection();
+            UpdateSmashSyncStatus();
+        }
+
+        private void SmashSyncAccept_OnClick(object sender, RoutedEventArgs e)
+        {
+            SmashSyncLobbyService.AcceptConnection();
+            UpdateSmashSyncStatus();
+        }
+
+        private void SmashSyncReject_OnClick(object sender, RoutedEventArgs e)
+        {
+            SmashSyncLobbyService.RejectConnection();
+            UpdateSmashSyncStatus();
+        }
+
+        private void SmashSyncDisconnect_OnClick(object sender, RoutedEventArgs e)
+        {
+            SmashSyncLobbyService.Disconnect();
+            UpdateSmashSyncStatus();
         }
 
         private void VSyncMode_PointerReleased(object sender, PointerReleasedEventArgs e)
