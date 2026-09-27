@@ -8,6 +8,11 @@ namespace Ryujinx.HLE.HOS.Services.Hid
     {
         public TouchDevice(Switch device, bool active) : base(device, active) { }
 
+        public void ResetSmashSyncInputHistory()
+        {
+            _device.Hid.SharedMemory.TouchScreen.Clear();
+        }
+
         public void Update(params ReadOnlySpan<TouchPoint> points)
         {
             ref RingLifo<TouchScreenState> lifo = ref _device.Hid.SharedMemory.TouchScreen;
