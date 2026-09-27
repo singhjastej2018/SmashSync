@@ -428,6 +428,8 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _startAckReceived = false;
                 _releaseReceived = false;
                 _releaseAckReceived = false;
+                _epochReceived = false;
+                _epochAckReceived = false;
                 _stateFingerprintReceived = false;
                 _remoteStateFingerprint = 0;
                 _lastStateFingerprintSendMs = 0;
@@ -436,8 +438,19 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _lastStartSendMs = 0;
                 _lastReleaseSendMs = 0;
                 _lastBarrierPingMs = 0;
+                _lastClockSyncSendMs = 0;
+                _clockSyncStartedMs = 0;
+                _lastEpochSendMs = 0;
                 _barrierEnteredMs = Environment.TickCount64;
                 _resumeTargetStamp = 0;
+                _sharedEpochP1Ns = 0;
+                _localEpochNs = 0;
+                lock (_clockLock)
+                {
+                    _clockSamples = 0;
+                    _clockBestRttNs = long.MaxValue;
+                    _clockOffsetNs = 0;
+                }
                 _tick = 0;
                 _nextTickStamp = Stopwatch.GetTimestamp();
                 _lastP1 = Neutral(PlayerIndex.Player1);
@@ -447,6 +460,34 @@ namespace Ryujinx.Input.HLE.SmashSync
                 lock (_remoteLock) _remoteHistory.Clear();
                 SendControl(PacketType.Ready, 0, 0);
                 Log("local READY: emulation paused at synchronization barrier");
+            }
+        }
+
+        public void WaitForResumeEpoch()
+        {
+            long targetNs = _localEpochNs;
+            if (targetNs <= 0)
+            {
+                return;
+            }
+
+            while (!_disposed)
+            {
+                long remainingNs = targetNs - MonotonicNowNs();
+                if (remainingNs <= 0)
+                {
+                    return;
+                }
+
+                if (remainingNs > 2_000_000)
+                {
+                    int sleepMs = (int)Math.Clamp(remainingNs / 1_000_000 - 1, 1, 10);
+                    Thread.Sleep(sleepMs);
+                }
+                else
+                {
+                    Thread.SpinWait(128);
+                }
             }
         }
 
@@ -659,12 +700,38 @@ namespace Ryujinx.Input.HLE.SmashSync
         private static long MillisecondsToStopwatchTicks(double milliseconds) =>
             (long)(milliseconds * Stopwatch.Frequency / 1000.0);
 
-        private bool IsTickDue() => Stopwatch.GetTimestamp() >= _nextTickStamp;
+        private static long MonotonicNowNs()
+        {
+            long ticks = Stopwatch.GetTimestamp();
+            long seconds = ticks / Stopwatch.Frequency;
+            long remainder = ticks % Stopwatch.Frequency;
+            return seconds * 1_000_000_000L + remainder * 1_000_000_000L / Stopwatch.Frequency;
+        }
+
+        private bool IsTickDue()
+        {
+            if (_mode == SmashSyncMode.Netplay && _localEpochNs > 0)
+            {
+                if (_tick > (ulong)(long.MaxValue / Math.Max(1, _tickIntervalNs)))
+                {
+                    return true;
+                }
+
+                long dueNs = _localEpochNs + (long)_tick * _tickIntervalNs;
+                return MonotonicNowNs() >= dueNs;
+            }
+
+            return Stopwatch.GetTimestamp() >= _nextTickStamp;
+        }
 
         private void AdvanceTick()
         {
             _tick++;
-            _nextTickStamp = Stopwatch.GetTimestamp() + _tickInterval;
+
+            if (_mode != SmashSyncMode.Netplay || _localEpochNs <= 0)
+            {
+                _nextTickStamp = Stopwatch.GetTimestamp() + _tickInterval;
+            }
         }
 
         private void OpenNetwork()
