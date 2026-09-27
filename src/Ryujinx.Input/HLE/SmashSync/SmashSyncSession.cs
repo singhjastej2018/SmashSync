@@ -508,7 +508,12 @@ namespace Ryujinx.Input.HLE.SmashSync
                 _tick = 0;
                 _localHistory.Clear();
                 lock (_remoteLock) _remoteHistory.Clear();
-                Log($"shared tick 0 started session={_sessionId}");
+
+                double epochErrorMs = _localEpochNs > 0
+                    ? (MonotonicNowNs() - _localEpochNs) / 1_000_000.0
+                    : 0;
+
+                Log($"shared tick 0 started session={_sessionId} epochErrorMs={epochErrorMs:F3}");
             }
         }
 
