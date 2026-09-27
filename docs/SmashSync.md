@@ -17,7 +17,7 @@ The first supported test target is Windows x64 on both machines, using the same 
 }
 ```
 
-This writes the exact P1/P2 input stream indexed by SmashSync host input-update tick.
+This writes the exact P1/P2 input stream indexed by SmashSync shared logical input tick.
 
 ## Replay
 
@@ -43,6 +43,7 @@ Player 1 machine:
   "PeerAddress": "100.x.x.x",
   "LocalPort": 27888,
   "PeerPort": 27888,
+  "SyncHz": 60,
   "InputDelayTicks": 2,
   "Redundancy": 3,
   "RequireReadyChord": true,
@@ -60,6 +61,7 @@ Player 2 machine can keep its physical controller configured in Ryujinx as P1 an
   "PeerAddress": "100.x.x.x",
   "LocalPort": 27888,
   "PeerPort": 27888,
+  "SyncHz": 60,
   "InputDelayTicks": 2,
   "Redundancy": 3,
   "RequireReadyChord": true,
