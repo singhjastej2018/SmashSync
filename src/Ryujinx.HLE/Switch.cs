@@ -99,6 +99,15 @@ namespace Ryujinx.HLE
             Gpu               = new GpuContext(Configuration.GpuRenderer, DirtyHacks);
             Debugger          = Configuration.EnableGdbStub ? new Debugger.Debugger(this, Configuration.GdbStubPort) : null;
             System            = new HOS.Horizon(this);
+
+            // For SmashSync, stop the guest monotonic clock immediately after it is
+            // created, before services/application loading can accumulate a different
+            // host-dependent startup offset on each PC.
+            if (Configuration.SuspendApplicationOnStart)
+            {
+                System.TogglePauseEmulation(true);
+            }
+
             Statistics        = new PerformanceStatistics(this);
             Hid               = new Hid(this, System.HidStorage);
             Processes         = new ProcessLoader(this);
@@ -177,7 +186,10 @@ namespace Ryujinx.HLE
         public void ArmApplicationStartPause()
         {
             Configuration.SuspendApplicationOnStart = true;
-            System.TogglePauseEmulation(true);
+            if (!System.IsPaused)
+            {
+                System.TogglePauseEmulation(true);
+            }
         }
 
         public void DisarmApplicationStartPause()
