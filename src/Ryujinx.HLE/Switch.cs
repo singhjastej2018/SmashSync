@@ -21,6 +21,8 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Collections.Generic;
+using Ryujinx.Common.Logging;
 
 namespace Ryujinx.HLE
 {
@@ -209,7 +211,7 @@ namespace Ryujinx.HLE
                 SaveDataFilter filter = SaveDataFilter.Make(
                     programId: default,
                     saveType: SaveDataType.Account,
-                    userId,
+                    userId: userId,
                     saveDataId: default,
                     index: default);
 
