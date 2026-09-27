@@ -1123,7 +1123,7 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
 
         protected override void Destroy() => Context.Dispose();
 
-        public Result SetActivity(bool pause)
+        public Result SetActivity(bool pause, Action transitionCommit = null)
         {
             KernelContext.CriticalSection.Enter();
 
@@ -1167,6 +1167,12 @@ namespace Ryujinx.HLE.HOS.Kernel.Process
 
                     IsPaused = false;
                 }
+
+                // SmashSync uses this hook to move the guest clock across the same
+                // scheduler critical section as the application pause transition.
+                // On resume, all application threads have been marked runnable but
+                // cannot leave the kernel transition before the guest counter starts.
+                transitionCommit?.Invoke();
 
                 KernelContext.CriticalSection.Leave();
 
