@@ -5,7 +5,9 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Threading;
+using System.Text;
 
 namespace Ryujinx.Input.HLE.SmashSync
 {
@@ -28,6 +30,10 @@ namespace Ryujinx.Input.HLE.SmashSync
         private static readonly object Sync = new();
         private static readonly object WriteSync = new();
         private static readonly object InputSync = new();
+        private static readonly object SaveSync = new();
+        private static readonly ManualResetEventSlim SaveReceivedEvent = new(false);
+        private const int MaxSaveSnapshotBytes = 256 * 1024 * 1024;
+        private const int SaveChunkBytes = 24 * 1024;
 
         private static SmashSyncConfig _config;
         private static IPAddress _peerAddress;
@@ -49,6 +55,13 @@ namespace Ryujinx.Input.HLE.SmashSync
         private static volatile SmashSyncLobbyState _state = SmashSyncLobbyState.Disabled;
         private static string _lastError = "";
         private static GamepadInput _latestRemoteInput;
+        private static MemoryStream _saveReceiveStream;
+        private static string _saveReceiveTitle;
+        private static long _saveExpectedLength;
+        private static string _saveExpectedSha;
+        private static int _saveNextSequence;
+        private static byte[] _receivedSaveSnapshot;
+        private static string _receivedSaveTitle;
 
         public static event Action ConnectionChanged;
 
@@ -258,6 +271,93 @@ namespace Ryujinx.Input.HLE.SmashSync
                 input.PlayerId = (PlayerIndex)(RemotePlayer - 1);
                 return input;
             }
+        }
+
+        internal static void SendAuthoritativeSave(string titleId, byte[] archive)
+        {
+            if (LocalPlayer != 1 || !IsConnected)
+            {
+                throw new InvalidOperationException("Only connected P1 can send the authoritative save.");
+            }
+
+            ArgumentNullException.ThrowIfNull(archive);
+            if (archive.Length > MaxSaveSnapshotBytes)
+            {
+                throw new InvalidOperationException($"Save snapshot is too large ({archive.Length} bytes).");
+            }
+
+            StreamWriter writer;
+            long nonce;
+            lock (Sync)
+            {
+                writer = _connectionWriter;
+                nonce = _connectionNonce;
+            }
+
+            if (writer == null)
+            {
+                throw new IOException("SmashSync lobby connection is not available.");
+            }
+
+            string sha = Convert.ToHexString(SHA256.HashData(archive)).ToLowerInvariant();
+
+            lock (WriteSync)
+            {
+                writer.WriteLine($"SAVE_BEGIN|{ProtocolName}|{ProtocolVersion}|{nonce}|1|{titleId}|{archive.Length}|{sha}");
+
+                int sequence = 0;
+                for (int offset = 0; offset < archive.Length; offset += SaveChunkBytes)
+                {
+                    int count = Math.Min(SaveChunkBytes, archive.Length - offset);
+                    string payload = Convert.ToBase64String(archive, offset, count);
+                    writer.WriteLine($"SAVE_DATA|{ProtocolName}|{ProtocolVersion}|{nonce}|1|{sequence}|{payload}");
+                    sequence++;
+                }
+
+                writer.WriteLine($"SAVE_END|{ProtocolName}|{ProtocolVersion}|{nonce}|1|{titleId}|{sha}");
+                writer.Flush();
+            }
+
+            Log($"authoritative P1 save sent title={titleId} bytes={archive.Length} sha256={sha[..16]}...");
+        }
+
+        internal static bool WaitForAuthoritativeSave(string titleId, int timeoutMs, out byte[] archive)
+        {
+            archive = null;
+
+            if (LocalPlayer != 2 || !IsConnected)
+            {
+                return false;
+            }
+
+            long deadline = Environment.TickCount64 + Math.Max(1000, timeoutMs);
+
+            while (IsConnected)
+            {
+                lock (SaveSync)
+                {
+                    if (_receivedSaveSnapshot != null &&
+                        string.Equals(_receivedSaveTitle, titleId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        archive = _receivedSaveSnapshot;
+                        _receivedSaveSnapshot = null;
+                        _receivedSaveTitle = null;
+                        SaveReceivedEvent.Reset();
+                        return true;
+                    }
+                }
+
+                int remaining = (int)Math.Clamp(deadline - Environment.TickCount64, 0, int.MaxValue);
+                if (remaining <= 0 || !SaveReceivedEvent.Wait(Math.Min(remaining, 250)))
+                {
+                    if (remaining <= 0)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static void RequestConnectionWorker()
@@ -489,8 +589,26 @@ namespace Ryujinx.Input.HLE.SmashSync
                             break;
                         }
 
-                        // HEARTBEAT is intentionally control-only. No keyboard,
-                        // mouse, game state, or file data is carried by this channel.
+                        if (parts[0] == "SAVE_BEGIN")
+                        {
+                            HandleSaveBegin(parts);
+                            continue;
+                        }
+
+                        if (parts[0] == "SAVE_DATA")
+                        {
+                            HandleSaveData(parts);
+                            continue;
+                        }
+
+                        if (parts[0] == "SAVE_END")
+                        {
+                            HandleSaveEnd(parts);
+                            continue;
+                        }
+
+                        // HEARTBEAT remains control-only. Save synchronization is a
+                        // one-time, explicitly scoped P1 -> P2 pre-launch transfer.
                     }
                 }
             }
@@ -505,6 +623,131 @@ namespace Ryujinx.Input.HLE.SmashSync
                         if (!_disposed) SetState(SmashSyncLobbyState.Idle);
                     }
                 }
+            }
+        }
+
+        private static void HandleSaveBegin(string[] parts)
+        {
+            if (LocalPlayer != 2 ||
+                parts.Length < 8 ||
+                !int.TryParse(parts[4], out int senderPlayer) ||
+                senderPlayer != 1 ||
+                !long.TryParse(parts[6], out long length) ||
+                length < 0 ||
+                length > MaxSaveSnapshotBytes)
+            {
+                return;
+            }
+
+            lock (SaveSync)
+            {
+                _saveReceiveStream?.Dispose();
+                _saveReceiveStream = new MemoryStream((int)length);
+                _saveReceiveTitle = parts[5];
+                _saveExpectedLength = length;
+                _saveExpectedSha = parts[7];
+                _saveNextSequence = 0;
+                _receivedSaveSnapshot = null;
+                _receivedSaveTitle = null;
+                SaveReceivedEvent.Reset();
+            }
+
+            Log($"receiving authoritative P1 save title={parts[5]} bytes={length}");
+        }
+
+        private static void HandleSaveData(string[] parts)
+        {
+            if (LocalPlayer != 2 || parts.Length < 7 || !int.TryParse(parts[5], out int sequence))
+            {
+                return;
+            }
+
+            lock (SaveSync)
+            {
+                if (_saveReceiveStream == null || sequence != _saveNextSequence)
+                {
+                    return;
+                }
+
+                try
+                {
+                    byte[] chunk = Convert.FromBase64String(parts[6]);
+                    if (_saveReceiveStream.Length + chunk.Length > _saveExpectedLength ||
+                        _saveReceiveStream.Length + chunk.Length > MaxSaveSnapshotBytes)
+                    {
+                        ResetSaveReceiveLocked();
+                        return;
+                    }
+
+                    _saveReceiveStream.Write(chunk, 0, chunk.Length);
+                    _saveNextSequence++;
+                }
+                catch
+                {
+                    ResetSaveReceiveLocked();
+                }
+            }
+        }
+
+        private static void HandleSaveEnd(string[] parts)
+        {
+            if (LocalPlayer != 2 || parts.Length < 7)
+            {
+                return;
+            }
+
+            lock (SaveSync)
+            {
+                if (_saveReceiveStream == null ||
+                    !string.Equals(parts[5], _saveReceiveTitle, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+
+                byte[] snapshot = _saveReceiveStream.ToArray();
+                string actualSha = Convert.ToHexString(SHA256.HashData(snapshot)).ToLowerInvariant();
+                bool valid = snapshot.LongLength == _saveExpectedLength &&
+                    string.Equals(actualSha, _saveExpectedSha, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(actualSha, parts[6], StringComparison.OrdinalIgnoreCase);
+
+                if (valid)
+                {
+                    _receivedSaveSnapshot = snapshot;
+                    _receivedSaveTitle = _saveReceiveTitle;
+                    Log($"authoritative P1 save received title={_receivedSaveTitle} bytes={snapshot.Length} sha256={actualSha[..16]}...");
+                    SaveReceivedEvent.Set();
+                }
+                else
+                {
+                    Log("authoritative P1 save failed length/hash validation");
+                }
+
+                ResetSaveReceiveLocked(preserveCompleted: valid);
+            }
+        }
+
+        private static void ResetSaveReceiveLocked(bool preserveCompleted = false)
+        {
+            _saveReceiveStream?.Dispose();
+            _saveReceiveStream = null;
+            _saveReceiveTitle = null;
+            _saveExpectedLength = 0;
+            _saveExpectedSha = null;
+            _saveNextSequence = 0;
+
+            if (!preserveCompleted)
+            {
+                _receivedSaveSnapshot = null;
+                _receivedSaveTitle = null;
+                SaveReceivedEvent.Reset();
+            }
+        }
+
+        private static void ResetSaveTransfer()
+        {
+            lock (SaveSync)
+            {
+                ResetSaveReceiveLocked();
             }
         }
 
@@ -579,6 +822,7 @@ namespace Ryujinx.Input.HLE.SmashSync
             _connectionWriter = null;
             _connectionNonce = 0;
             lock (InputSync) _latestRemoteInput = default;
+            ResetSaveTransfer();
         }
 
         private static void Log(string message)
