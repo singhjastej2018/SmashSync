@@ -162,6 +162,17 @@ namespace Ryujinx.HLE
         public bool LoadNsp(string nspFile, ulong applicationId = 0) => Processes.LoadNsp(nspFile, applicationId);
         public bool LoadProgram(string fileName) => Processes.LoadNxo(fileName);
 
+        public void ArmApplicationStartPause()
+        {
+            Configuration.DebuggerSuspendOnStart = true;
+            System.TogglePauseEmulation(true);
+        }
+
+        public void DisarmApplicationStartPause()
+        {
+            Configuration.DebuggerSuspendOnStart = false;
+        }
+
         public void SetVolume(float volume) => AudioDeviceDriver.Volume = Math.Clamp(volume, 0f, 1f);
         public float GetVolume() => AudioDeviceDriver.Volume;
         public bool IsAudioMuted() => AudioDeviceDriver.Volume == 0;
