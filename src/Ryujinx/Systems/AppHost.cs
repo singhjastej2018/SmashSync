@@ -1556,20 +1556,28 @@ namespace Ryujinx.Ava.Systems
                 }
             }
 
-            // Touchscreen.
-            bool hasTouch = false;
-
-            if (_viewModel.IsActive && !ConfigurationState.Instance.Hid.EnableMouse.Value)
+            // Host pointer/touch/debug-pad input is intentionally not exposed
+            // during SmashSync. Those streams are not networked and touch/mouse
+            // coordinates depend on each local window/aspect ratio.
+            if (!NpadManager.SmashSyncCanonicalRouting)
             {
-                hasTouch = TouchScreenManager.Update(true, (_inputManager.MouseDriver as AvaloniaMouseDriver).IsButtonPressed(MouseButton.Button1), ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat());
-            }
+                bool hasTouch = false;
 
-            if (!hasTouch)
-            {
-                Device.Hid.Touchscreen.Update();
-            }
+                if (_viewModel.IsActive && !ConfigurationState.Instance.Hid.EnableMouse.Value)
+                {
+                    hasTouch = TouchScreenManager.Update(
+                        true,
+                        (_inputManager.MouseDriver as AvaloniaMouseDriver).IsButtonPressed(MouseButton.Button1),
+                        ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat());
+                }
 
-            Device.Hid.DebugPad.Update();
+                if (!hasTouch)
+                {
+                    Device.Hid.Touchscreen.Update();
+                }
+
+                Device.Hid.DebugPad.Update();
+            }
 
             return true;
         }
