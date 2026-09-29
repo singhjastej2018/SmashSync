@@ -468,7 +468,7 @@ namespace Ryujinx.Ava.Systems.AppLibrary
 
                             Nca nca = new(_virtualFileSystem.KeySet, new FileStream(applicationPath, FileMode.Open, FileAccess.Read).AsStorage());
 
-                            if (!nca.IsProgram || nca.IsPatch)
+                            if (!nca.IsProgram() || nca.IsPatch())
                             {
                                 return false;
                             }
