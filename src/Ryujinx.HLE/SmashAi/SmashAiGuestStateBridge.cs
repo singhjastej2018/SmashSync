@@ -1,5 +1,6 @@
 using Ryujinx.HLE.HOS.Kernel.Memory;
 using Ryujinx.HLE.HOS.Kernel.Process;
+using Ryujinx.HLE.Loaders.Processes;
 using Ryujinx.Memory;
 using System;
 using System.Buffers;
