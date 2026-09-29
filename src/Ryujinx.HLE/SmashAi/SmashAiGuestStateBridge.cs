@@ -25,6 +25,10 @@ namespace Ryujinx.HLE.SmashAi
         private const ulong PreferredPluginRegionMaxSize = 16UL * 1024 * 1024;
         private const ulong MaxFallbackBytesPerRegionType = 512UL * 1024 * 1024;
 
+        private static readonly object RegistrationLock = new();
+        private static ulong _registeredPid;
+        private static ulong _registeredAddress;
+
         private readonly Switch _device;
 
         private ulong _cachedPid;
@@ -59,6 +63,13 @@ namespace Ryujinx.HLE.SmashAi
                 return true;
             }
 
+            if (TryGetRegisteredAddress(process.Pid, out ulong registeredAddress) &&
+                TryReadAt(process, registeredAddress, destination, out bytesWritten))
+            {
+                _cachedAddress = registeredAddress;
+                return true;
+            }
+
             _cachedAddress = 0;
 
             long now = Stopwatch.GetTimestamp();
@@ -83,6 +94,88 @@ namespace Ryujinx.HLE.SmashAi
             }
 
             return false;
+        }
+
+        internal static void RegisterLoadedNroData(KProcess process, ulong dataAddress, ulong dataSize)
+        {
+            if (process == null || dataAddress == 0 || dataSize < HeaderSize)
+            {
+                return;
+            }
+
+            if (TryFindMagicInRange(process, dataAddress, dataSize, out ulong address))
+            {
+                lock (RegistrationLock)
+                {
+                    _registeredPid = process.Pid;
+                    _registeredAddress = address;
+                }
+            }
+        }
+
+        private static bool TryGetRegisteredAddress(ulong pid, out ulong address)
+        {
+            lock (RegistrationLock)
+            {
+                if (_registeredPid == pid && _registeredAddress != 0)
+                {
+                    address = _registeredAddress;
+                    return true;
+                }
+            }
+
+            address = 0;
+            return false;
+        }
+
+        private static bool TryFindMagicInRange(KProcess process, ulong startAddress, ulong size, out ulong address)
+        {
+            address = 0;
+            byte[] rented = ArrayPool<byte>.Shared.Rent(ScanChunkSize + Magic.Length - 1);
+
+            try
+            {
+                ulong offset = 0;
+                int carry = 0;
+
+                while (offset < size)
+                {
+                    int length = (int)Math.Min((ulong)ScanChunkSize, size - offset);
+                    Span<byte> chunk = rented.AsSpan(0, carry + length);
+
+                    try
+                    {
+                        process.CpuMemory.Read(startAddress + offset, chunk.Slice(carry, length));
+                    }
+                    catch (InvalidMemoryRegionException)
+                    {
+                        carry = 0;
+                        offset += (ulong)length;
+                        continue;
+                    }
+
+                    int index = chunk.IndexOf(Magic);
+                    if (index >= 0)
+                    {
+                        address = startAddress + offset - (ulong)carry + (ulong)index;
+                        return true;
+                    }
+
+                    carry = Math.Min(Magic.Length - 1, chunk.Length);
+                    if (carry > 0)
+                    {
+                        chunk.Slice(chunk.Length - carry, carry).CopyTo(rented.AsSpan(0, carry));
+                    }
+
+                    offset += (ulong)length;
+                }
+
+                return false;
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
         }
 
         private static bool TryReadAt(KProcess process, ulong address, Span<byte> destination, out int bytesWritten)
