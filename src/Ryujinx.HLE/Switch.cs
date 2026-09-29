@@ -11,6 +11,7 @@ using Ryujinx.HLE.HOS;
 using Ryujinx.HLE.HOS.Services.Apm;
 using Ryujinx.HLE.HOS.Services.Hid;
 using Ryujinx.HLE.Loaders.Processes;
+using Ryujinx.HLE.SmashAi;
 using Ryujinx.HLE.UI;
 using Ryujinx.Memory;
 using System;
@@ -55,6 +56,8 @@ namespace Ryujinx.HLE
         public IHostUIHandler UIHandler { get; }
         public Debugger.Debugger Debugger { get; }
 
+        private readonly SmashAiGuestStateBridge _smashAiGuestStateBridge;
+
         public int CpuCoresCount = 4; // Switch has a quad-core Tegra X1 SoC
 
         public VSyncMode VSyncMode { get; set; }
@@ -91,6 +94,7 @@ namespace Ryujinx.HLE
             Hid               = new Hid(this, System.HidStorage);
             Processes         = new ProcessLoader(this);
             TamperMachine     = new TamperMachine();
+            _smashAiGuestStateBridge = new SmashAiGuestStateBridge(this);
 
             System.InitializeServices();
             System.State.SetLanguage(Configuration.SystemLanguage);
@@ -167,6 +171,15 @@ namespace Ryujinx.HLE
         public bool IsAudioMuted() => AudioDeviceDriver.Volume == 0;
 
         public void EnableCheats() => ModLoader.EnableCheats(Processes.ActiveApplication.ProgramId, TamperMachine);
+
+        /// <summary>
+        /// Reads the current SSBU AI observation block exported by the companion guest plugin.
+        /// Returns false until a valid SSAI0001 block is present in the active application.
+        /// </summary>
+        public bool TryReadSmashAiGuestState(Span<byte> destination, out int bytesWritten)
+        {
+            return _smashAiGuestStateBridge.TryRead(destination, out bytesWritten);
+        }
 
         public bool WaitFifo() => Gpu.GPFifo.WaitForCommands();
         public bool ConsumeFrameAvailable() => Gpu.Window.ConsumeFrameAvailable();
