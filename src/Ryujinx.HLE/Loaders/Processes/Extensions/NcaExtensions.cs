@@ -44,7 +44,7 @@ namespace Ryujinx.HLE.Loaders.Processes.Extensions
 
             // Collecting mods related to AocTitleIds and ProgramId.
             device.Configuration.VirtualFileSystem.ModLoader.CollectMods(
-                device.Configuration.ContentManager.GetAocTitleIds().Prepend(metaLoader.ProgramId),
+                device.Configuration.ContentManager.GetAocTitleIds().Prepend(metaLoader.GetProgramId()),
                 ModLoader.GetModsBasePath(),
                 ModLoader.GetSdModsBasePath());
 
@@ -74,7 +74,7 @@ namespace Ryujinx.HLE.Loaders.Processes.Extensions
 
             */
 
-            ProcessResult processResult = exeFs.Load(device, nacpData, metaLoader, (byte)nca.ProgramIndex);
+            ProcessResult processResult = exeFs.Load(device, nacpData, metaLoader, (byte)nca.GetProgramIndex());
 
             // Load RomFS.
             if (romFs == null)
@@ -99,6 +99,21 @@ namespace Ryujinx.HLE.Loaders.Processes.Extensions
             return processResult;
         }
 
+        public static ulong GetProgramIdBase(this Nca nca)
+        {
+            return nca.Header.TitleId & ~0x1FFFUL;
+        }
+
+        public static int GetProgramIndex(this Nca nca)
+        {
+            return (int)(nca.Header.TitleId & 0xF);
+        }
+
+        public static bool IsProgram(this Nca nca)
+        {
+            return nca.Header.ContentType == NcaContentType.Program;
+        }
+
         public static (Nca, Nca) GetUpdateData(this Nca mainNca, VirtualFileSystem fileSystem, IntegrityCheckLevel checkLevel, int programIndex, out string updatePath)
         {
             updatePath = null;
@@ -108,7 +123,7 @@ namespace Ryujinx.HLE.Loaders.Processes.Extensions
             Nca updateControlNca = null;
 
             // Clear the program index part.
-            ulong titleIdBase = mainNca.ProgramIdBase;
+            ulong titleIdBase = mainNca.GetProgramIdBase();
 
             // Load update information if exists.
             string titleUpdateMetadataPath = Path.Combine(AppDataManager.GamesDirPath, titleIdBase.ToString("x16"), "updates.json");
