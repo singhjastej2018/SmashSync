@@ -15,7 +15,6 @@ using Ryujinx.HLE.SmashAi;
 using Ryujinx.HLE.UI;
 using Ryujinx.Memory;
 using System;
-using System.Buffers;
 
 namespace Ryujinx.HLE
 {
@@ -170,122 +169,6 @@ namespace Ryujinx.HLE
         public void SetVolume(float volume) => AudioDeviceDriver.Volume = Math.Clamp(volume, 0f, 1f);
         public float GetVolume() => AudioDeviceDriver.Volume;
         public bool IsAudioMuted() => AudioDeviceDriver.Volume == 0;
-
-        public bool TryReadActiveApplicationMemory(ulong address, Span<byte> destination)
-        {
-            ProcessResult active = Processes.ActiveApplication;
-            if (active == null ||
-                !System.KernelContext.Processes.TryGetValue(active.ProcessId, out HOS.Kernel.Process.KProcess process) ||
-                !process.CpuMemory.IsRangeMapped(address, (ulong)destination.Length))
-            {
-                return false;
-            }
-
-            try
-            {
-                process.CpuMemory.Read(address, destination);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        public bool TryFindActiveApplicationMemory(ReadOnlySpan<byte> needle, out ulong foundAddress)
-        {
-            foundAddress = 0;
-            if (needle.IsEmpty)
-            {
-                return false;
-            }
-
-            ProcessResult active = Processes.ActiveApplication;
-            if (active == null ||
-                !System.KernelContext.Processes.TryGetValue(active.ProcessId, out HOS.Kernel.Process.KProcess process))
-            {
-                return false;
-            }
-
-            const int ChunkSize = 1 << 20;
-            const ulong MaxBytesToScan = 512UL << 20;
-            byte[] rented = ArrayPool<byte>.Shared.Rent(ChunkSize + needle.Length);
-            ulong totalScanned = 0;
-
-            try
-            {
-                ulong address = 0;
-                ulong previous = ulong.MaxValue;
-
-                while (address != previous && totalScanned < MaxBytesToScan)
-                {
-                    previous = address;
-                    HOS.Kernel.Memory.KMemoryInfo info = process.MemoryManager.QueryMemory(address);
-
-                    ulong regionAddress = info.Address;
-                    ulong regionSize = info.Size;
-                    HOS.Kernel.Memory.MemoryState state = info.State;
-                    HOS.Kernel.Memory.KMemoryPermission permission = info.Permission;
-                    HOS.Kernel.Memory.KMemoryInfo.Pool.Release(info);
-
-                    bool interesting =
-                        state == HOS.Kernel.Memory.MemoryState.ModCodeMutable ||
-                        state == HOS.Kernel.Memory.MemoryState.CodeMutable ||
-                        state == HOS.Kernel.Memory.MemoryState.Heap;
-
-                    if (interesting && (permission & HOS.Kernel.Memory.KMemoryPermission.Read) != 0)
-                    {
-                        ulong offset = 0;
-                        int carry = 0;
-
-                        while (offset < regionSize && totalScanned < MaxBytesToScan)
-                        {
-                            int readSize = (int)Math.Min((ulong)ChunkSize, regionSize - offset);
-                            Span<byte> target = rented.AsSpan(carry, readSize);
-
-                            try
-                            {
-                                process.CpuMemory.Read(regionAddress + offset, target);
-                            }
-                            catch
-                            {
-                                break;
-                            }
-
-                            int available = carry + readSize;
-                            int index = rented.AsSpan(0, available).IndexOf(needle);
-                            if (index >= 0)
-                            {
-                                foundAddress = regionAddress + offset - (ulong)carry + (ulong)index;
-                                return true;
-                            }
-
-                            carry = Math.Min(needle.Length - 1, available);
-                            if (carry > 0)
-                            {
-                                rented.AsSpan(available - carry, carry).CopyTo(rented);
-                            }
-
-                            offset += (ulong)readSize;
-                            totalScanned += (ulong)readSize;
-                        }
-                    }
-
-                    if (regionSize == 0 || regionAddress + regionSize <= address)
-                    {
-                        break;
-                    }
-
-                    address = regionAddress + regionSize;
-                }
-            }
-            finally
-            {
-                ArrayPool<byte>.Shared.Return(rented);
-            }
-
-            return false;
-        }
 
         public void EnableCheats() => ModLoader.EnableCheats(Processes.ActiveApplication.ProgramId, TamperMachine);
 
