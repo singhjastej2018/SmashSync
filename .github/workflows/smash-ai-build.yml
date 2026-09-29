@@ -1,0 +1,44 @@
+name: Smash AI Windows build
+
+on:
+  push:
+    branches:
+      - smash-ai
+  workflow_dispatch:
+
+jobs:
+  build-win-x64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Publish Windows x64
+        run: dotnet publish src/Ryujinx/Ryujinx.csproj -c Release -r win-x64 --self-contained true -o publish -p:Version=1.0.0-smash-ai
+
+      - name: Add Smash AI tools
+        run: |
+          mkdir -p publish/SmashAI-tools
+          cp tools/SmashAI/* publish/SmashAI-tools/
+          cp docs/SmashAI.md publish/SmashAI-tools/README.md
+          cp tools/SmashAI/Launch-SmashAI.bat publish/Launch-SmashAI.bat
+
+      - name: Package
+        run: |
+          cd publish
+          zip -r ../Ryujinx-SmashAI-win-x64.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ryujinx-SmashAI-win-x64
+          path: Ryujinx-SmashAI-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14
