@@ -36,7 +36,7 @@ namespace Ryujinx.HLE.Loaders.Processes.Extensions
 
         public static ProcessResult Load(this IFileSystem exeFs, Switch device, BlitStruct<ApplicationControlProperty> nacpData, MetaLoader metaLoader, byte programIndex, bool isHomebrew = false)
         {
-            ulong programId = metaLoader.ProgramId;
+            ulong programId = metaLoader.GetProgramId();
 
             // Replace the whole ExeFs partition by the modded one.
             if (device.Configuration.VirtualFileSystem.ModLoader.ReplaceExefsPartition(programId, ref exeFs))
