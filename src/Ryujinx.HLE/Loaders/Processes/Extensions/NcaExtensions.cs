@@ -114,6 +114,23 @@ namespace Ryujinx.HLE.Loaders.Processes.Extensions
             return nca.Header.ContentType == NcaContentType.Program;
         }
 
+        public static bool IsMain(this Nca nca)
+        {
+            return nca.IsProgram() && !nca.IsPatch();
+        }
+
+        public static bool IsPatch(this Nca nca)
+        {
+            int dataIndex = Nca.GetSectionIndexFromType(NcaSectionType.Data, NcaContentType.Program);
+
+            return nca.IsProgram() && nca.SectionExists(NcaSectionType.Data) && nca.Header.GetFsHeader(dataIndex).IsPatchSection();
+        }
+
+        public static bool IsControl(this Nca nca)
+        {
+            return nca.Header.ContentType == NcaContentType.Control;
+        }
+
         public static (Nca, Nca) GetUpdateData(this Nca mainNca, VirtualFileSystem fileSystem, IntegrityCheckLevel checkLevel, int programIndex, out string updatePath)
         {
             updatePath = null;
