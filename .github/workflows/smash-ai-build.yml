@@ -7,13 +7,13 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: smash-ai-build
+  group: smash-ai-build-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-win-x64:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  host-win-x64:
+    runs-on: windows-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -25,7 +25,37 @@ jobs:
           global-json-file: global.json
 
       - name: Publish Windows x64
+        shell: pwsh
         run: dotnet publish src/Ryujinx/Ryujinx.csproj -c Release -r win-x64 --self-contained true -o publish -p:Version=1.0.0-smash-ai
+
+      - name: Add Smash AI tools
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force publish/SmashAI-tools | Out-Null
+          Copy-Item tools/SmashAI/test_bridge.py publish/SmashAI-tools/
+          Copy-Item tools/SmashAI/Launch-SmashAI.bat publish/SmashAI-tools/
+          Copy-Item docs/SmashAI.md publish/SmashAI-tools/README.md
+          Copy-Item tools/SmashAI/Launch-SmashAI.bat publish/Launch-SmashAI.bat
+
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path publish/* -DestinationPath Ryujinx-SmashAI-win-x64.zip
+
+      - name: Upload host artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ryujinx-SmashAI-win-x64
+          path: Ryujinx-SmashAI-win-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  guest-exporter:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup Rust nightly
         uses: dtolnay/rust-toolchain@nightly
@@ -41,25 +71,16 @@ jobs:
         working-directory: tools/SmashAI/guest
         run: cargo-skyline skyline build --release
 
-      - name: Add Smash AI tools
+      - name: Package guest exporter
         run: |
-          mkdir -p publish/SmashAI-tools
-          cp tools/SmashAI/test_bridge.py publish/SmashAI-tools/
-          cp tools/SmashAI/Launch-SmashAI.bat publish/SmashAI-tools/
-          cp tools/SmashAI/guest/target/aarch64-skyline-switch/release/libsmash_ai_state.nro publish/SmashAI-tools/
-          cp tools/SmashAI/guest/README.md publish/SmashAI-tools/GUEST-PLUGIN.md
-          cp docs/SmashAI.md publish/SmashAI-tools/README.md
-          cp tools/SmashAI/Launch-SmashAI.bat publish/Launch-SmashAI.bat
+          mkdir guest-artifact
+          cp tools/SmashAI/guest/target/aarch64-skyline-switch/release/libsmash_ai_state.nro guest-artifact/
+          cp tools/SmashAI/guest/README.md guest-artifact/README.md
 
-      - name: Package
-        run: |
-          cd publish
-          zip -r ../Ryujinx-SmashAI-win-x64.zip .
-
-      - name: Upload artifact
+      - name: Upload guest artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ryujinx-SmashAI-win-x64
-          path: Ryujinx-SmashAI-win-x64.zip
+          name: SmashAI-SSBU-state-exporter
+          path: guest-artifact
           if-no-files-found: error
           retention-days: 14
