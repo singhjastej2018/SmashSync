@@ -41,6 +41,7 @@ namespace Ryujinx.Input.HLE
         private bool _enableKeyboard;
         private bool _enableMouse;
         private Switch _device;
+        private SmashAiInputBridge _smashAiBridge;
         
         private readonly List<GamepadInput> _hleInputStates = [];
         private readonly List<SixAxisInput> _hleMotionStates = new(NpadDevices.MaxControllers);
@@ -378,6 +379,9 @@ namespace Ryujinx.Input.HLE
             _device.Configuration.RefreshInputConfig = RefreshInputConfigForHLE;
 
             ReloadConfiguration(inputConfig, playerInputAssignments, enableKeyboard, enableMouse);
+
+            _smashAiBridge?.Dispose();
+            _smashAiBridge = SmashAiInputBridge.TryCreate(_device);
         }
 
         public void Update(float aspectRatio = 1)
@@ -410,8 +414,6 @@ namespace Ryujinx.Input.HLE
 
                         inputState = controller.GetHLEInputState();
 
-                        inputState.Buttons |= _device.Hid.UpdateStickButtons(inputState.LStick, inputState.RStick);
-
                         isJoyconPair = inputConfig.ControllerType == ControllerType.JoyconPair;
 
                         SixAxisInput altMotionState = isJoyconPair ? controller.GetHLEMotionState(true) : default;
@@ -424,6 +426,12 @@ namespace Ryujinx.Input.HLE
                         motionState.Item1.Orientation = new float[9];
                     }
 
+                    if (_smashAiBridge?.TryGetInput(playerIndex, out GamepadInput aiInputState) == true)
+                    {
+                        inputState = aiInputState;
+                    }
+
+                    inputState.Buttons |= _device.Hid.UpdateStickButtons(inputState.LStick, inputState.RStick);
                     inputState.PlayerId = playerIndex;
                     motionState.Item1.PlayerId = playerIndex;
 
@@ -517,6 +525,9 @@ namespace Ryujinx.Input.HLE
                 {
                     if (!_isDisposed)
                     {
+                        _smashAiBridge?.Dispose();
+                        _smashAiBridge = null;
+
                         _cemuHookClient.Dispose();
 
                         _gamepadDriver.OnGamepadConnected -= HandleOnGamepadConnected;
