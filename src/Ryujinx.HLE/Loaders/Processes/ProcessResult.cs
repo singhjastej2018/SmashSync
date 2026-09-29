@@ -4,6 +4,7 @@ using LibHac.Ns;
 using Ryujinx.Common.Logging;
 using Ryujinx.Cpu;
 using Ryujinx.HLE.HOS.SystemState;
+using Ryujinx.HLE.Loaders.Processes.Extensions;
 using Ryujinx.Horizon.Common;
 
 namespace Ryujinx.HLE.Loaders.Processes
@@ -54,7 +55,7 @@ namespace Ryujinx.HLE.Loaders.Processes
             if (metaLoader is not null)
             {
                 Logger.Info?.Print(LogClass.Application,$"metaLoader: {metaLoader}");
-                ulong programId = metaLoader.ProgramId;
+                ulong programId = metaLoader.GetProgramId();
 
                 Name = ApplicationControlProperties.Title[(int)titleLanguage].NameString.ToString();
 
@@ -72,7 +73,7 @@ namespace Ryujinx.HLE.Loaders.Processes
                 DisplayVersion = ApplicationControlProperties.DisplayVersionString.ToString();
                 ProgramId = programId;
                 ProgramIdText = $"{programId:x16}";
-                Is64Bit = metaLoader.IsProgram64Bit;
+                Is64Bit = metaLoader.IsProgram64Bit();
                 Identity = new ProcessIdentity(pid, programId, programIndex, DisplayVersion, GetProcessKind(programId));
             } 
             
