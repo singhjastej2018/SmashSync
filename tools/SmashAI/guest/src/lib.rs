@@ -166,10 +166,10 @@ unsafe extern "C" fn fighter_frame(fighter: &mut L2CFighterCommon) {
     let state = &mut SMASH_AI_SHARED_STATE.fighters[entry_id];
     state.sample_frame = SMASH_AI_SHARED_STATE.frame;
     state.present = 1;
-    state.fighter_kind = app::utility::get_kind(module_accessor);
+    state.fighter_kind = app::utility::get_kind(&mut *module_accessor);
     state.status_kind = StatusModule::status_kind(module_accessor);
     state.situation_kind = StatusModule::situation_kind(module_accessor);
-    state.stocks = stocks;
+    state.stocks = stocks as i32;
     state.is_cpu = if is_cpu { 1 } else { 0 };
 
     state.x = PostureModule::pos_x(module_accessor);
