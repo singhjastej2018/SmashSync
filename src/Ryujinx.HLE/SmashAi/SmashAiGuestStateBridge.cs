@@ -22,7 +22,8 @@ namespace Ryujinx.HLE.SmashAi
         public const int MaxStateSize = 16 * 1024;
 
         private const int ScanChunkSize = 64 * 1024;
-        private const ulong MaxBytesPerRegionType = 64UL * 1024 * 1024;
+        private const ulong PreferredPluginRegionMaxSize = 16UL * 1024 * 1024;
+        private const ulong MaxFallbackBytesPerRegionType = 512UL * 1024 * 1024;
 
         private readonly Switch _device;
 
@@ -68,10 +69,14 @@ namespace Ryujinx.HLE.SmashAi
 
             _nextScanTimestamp = now + (2 * Stopwatch.Frequency);
 
-            // Skyline/exlaunch module writable data should normally be ModCodeMutable.
-            // CodeMutable is retained as a fallback for alternate loaders.
-            if (TryFindMagic(process, MemoryState.ModCodeMutable, out ulong address) ||
-                TryFindMagic(process, MemoryState.CodeMutable, out address))
+            // Skyline NRO writable data is mapped as writable code memory. SSBU's own
+            // mutable data can be much larger than a plugin and can appear earlier in
+            // the address space, so first scan small writable-code regions (where NRO
+            // plugin data normally lives), then do a larger fallback scan.
+            if (TryFindMagic(process, MemoryState.ModCodeMutable, PreferredPluginRegionMaxSize, ulong.MaxValue, out ulong address) ||
+                TryFindMagic(process, MemoryState.CodeMutable, PreferredPluginRegionMaxSize, ulong.MaxValue, out address) ||
+                TryFindMagic(process, MemoryState.ModCodeMutable, ulong.MaxValue, MaxFallbackBytesPerRegionType, out address) ||
+                TryFindMagic(process, MemoryState.CodeMutable, ulong.MaxValue, MaxFallbackBytesPerRegionType, out address))
             {
                 _cachedAddress = address;
                 return TryReadAt(process, address, destination, out bytesWritten);
@@ -128,7 +133,12 @@ namespace Ryujinx.HLE.SmashAi
             }
         }
 
-        private static bool TryFindMagic(KProcess process, MemoryState targetType, out ulong address)
+        private static bool TryFindMagic(
+            KProcess process,
+            MemoryState targetType,
+            ulong maxRegionSize,
+            ulong maxTotalBytes,
+            out ulong address)
         {
             address = 0;
             ulong cursor = 0;
@@ -159,12 +169,13 @@ namespace Ryujinx.HLE.SmashAi
                     }
 
                     if (regionType == targetType &&
+                        regionSize <= maxRegionSize &&
                         (permission & KMemoryPermission.Read) != 0 &&
                         (permission & KMemoryPermission.Write) != 0)
                     {
                         ulong regionOffset = 0;
 
-                        while (regionOffset < regionSize && scannedBytes < MaxBytesPerRegionType)
+                        while (regionOffset < regionSize && scannedBytes < maxTotalBytes)
                         {
                             int length = (int)Math.Min((ulong)ScanChunkSize, regionSize - regionOffset);
 
