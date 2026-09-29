@@ -1,6 +1,6 @@
 [package]
 name = "smash_ai_state"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 [package.metadata.skyline]
@@ -12,7 +12,6 @@ crate-type = ["cdylib"]
 [dependencies]
 skyline = { git = "https://github.com/ultimate-research/skyline-rs.git" }
 skyline_smash = { git = "https://github.com/ultimate-research/skyline-smash.git" }
-smashline = { git = "https://github.com/HDR-Development/smashline.git" }
 
 [profile.release]
 panic = "abort"
