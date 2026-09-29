@@ -1,10 +1,24 @@
 use smash::app::{self, lua_bind::*};
 use smash::lib::lua_const::*;
-use smash::lua2cpp::L2CFighterCommon;
-use smashline::{Agent, Main};
+use skyline::hooks::{self, Region};
 
 const MAX_FIGHTERS: usize = 3;
 const PROTOCOL_VERSION: u32 = 1;
+
+// Signature for SSBU's once-per-game-frame function. This is searched at runtime
+// instead of using a fixed game-version offset, so the exporter does not need
+// Smashline and is less brittle across nearby SSBU updates.
+const ONCE_PER_GAME_FRAME_PATTERN: &[u8] = &[
+    0xff, 0xc3, 0x01, 0xd1, // sub sp, sp, #0x70
+    0xfb, 0x0b, 0x00, 0xf9, // str x27, [sp, #0x10]
+    0xfa, 0x67, 0x02, 0xa9, // stp x26, x25, [sp, #0x20]
+    0xf8, 0x5f, 0x03, 0xa9, // stp x24, x23, [sp, #0x30]
+    0xf6, 0x57, 0x04, 0xa9, // stp x22, x21, [sp, #0x40]
+    0xf4, 0x4f, 0x05, 0xa9, // stp x20, x19, [sp, #0x50]
+    0xfd, 0x7b, 0x06, 0xa9, // stp x29, x30, [sp, #0x60]
+    0xfd, 0x83, 0x01, 0x91, // add x29, sp, #0x60
+    0x0b, 0x90, 0x40, 0xf9, // ldr x11, [x0, #0x120]
+];
 
 extern "C" {
     #[link_name = "\u{1}_ZN3app14sv_information8stage_idEv"]
@@ -104,6 +118,9 @@ impl SharedState {
 pub static mut SMASH_AI_SHARED_STATE: SharedState = SharedState::new();
 
 static mut FIGHTER_MANAGER_ADDR: usize = 0;
+static mut ORIGINAL_ONCE_PER_GAME_FRAME: *mut core::ffi::c_void = core::ptr::null_mut();
+
+type OncePerGameFrameFn = unsafe extern "C" fn(u64);
 
 #[inline]
 unsafe fn begin_write() {
@@ -117,96 +134,188 @@ unsafe fn end_write() {
     SMASH_AI_SHARED_STATE.sequence = SMASH_AI_SHARED_STATE.sequence.wrapping_add(1) & !1;
 }
 
-unsafe extern "C" fn fighter_frame(fighter: &mut L2CFighterCommon) {
-    let module_accessor = fighter.module_accessor;
+unsafe fn find_text_pattern(pattern: &[u8]) -> Option<usize> {
+    let text_start = hooks::getRegionAddress(Region::Text) as usize;
+    let rodata_start = hooks::getRegionAddress(Region::Rodata) as usize;
+
+    if text_start == 0 || rodata_start <= text_start || pattern.is_empty() {
+        return None;
+    }
+
+    let text = core::slice::from_raw_parts(
+        text_start as *const u8,
+        rodata_start.saturating_sub(text_start),
+    );
+
+    text.windows(pattern.len())
+        .position(|window| window == pattern)
+        .map(|offset| text_start + offset)
+}
+
+unsafe fn get_fighter_manager() -> *mut app::FighterManager {
+    if FIGHTER_MANAGER_ADDR == 0 {
+        return core::ptr::null_mut();
+    }
+
+    *(FIGHTER_MANAGER_ADDR as *mut *mut app::FighterManager)
+}
+
+unsafe fn sample_fighter(
+    mgr: *mut app::FighterManager,
+    entry_id: usize,
+    frame: u64,
+) -> FighterState {
+    if mgr.is_null() {
+        return FighterState::EMPTY;
+    }
+
+    let fighter_entry =
+        FighterManager::get_fighter_entry(mgr, app::FighterEntryID(entry_id as i32))
+            as *mut app::FighterEntry;
+
+    if fighter_entry.is_null() {
+        return FighterState::EMPTY;
+    }
+
+    let fighter_id = FighterEntry::current_fighter_id(fighter_entry);
+    let module_accessor = app::sv_battle_object::module_accessor(fighter_id as u32);
+
     if module_accessor.is_null() {
-        return;
+        return FighterState::EMPTY;
     }
 
-    let entry_id =
-        WorkModule::get_int(module_accessor, *FIGHTER_INSTANCE_WORK_ID_INT_ENTRY_ID) as usize;
+    let info =
+        FighterManager::get_fighter_information(mgr, app::FighterEntryID(entry_id as i32));
 
-    if entry_id >= MAX_FIGHTERS {
-        return;
+    let (stocks, is_cpu) = if info.is_null() {
+        (0, false)
+    } else {
+        (
+            FighterInformation::stock_count(info) as i32,
+            FighterInformation::is_operation_cpu(info),
+        )
+    };
+
+    FighterState {
+        sample_frame: frame,
+        present: 1,
+        fighter_kind: app::utility::get_kind(&mut *module_accessor),
+        status_kind: StatusModule::status_kind(module_accessor),
+        situation_kind: StatusModule::situation_kind(module_accessor),
+        stocks,
+        is_cpu: if is_cpu { 1 } else { 0 },
+
+        x: PostureModule::pos_x(module_accessor),
+        y: PostureModule::pos_y(module_accessor),
+        speed_x: KineticModule::get_sum_speed_x(
+            module_accessor,
+            *KINETIC_ENERGY_RESERVE_ATTRIBUTE_MAIN,
+        ),
+        speed_y: KineticModule::get_sum_speed_y(
+            module_accessor,
+            *KINETIC_ENERGY_RESERVE_ATTRIBUTE_MAIN,
+        ),
+        facing: PostureModule::lr(module_accessor),
+        percent: DamageModule::damage(module_accessor, 0),
+
+        motion_kind: MotionModule::motion_kind(module_accessor),
+        motion_frame: MotionModule::frame(module_accessor),
+        motion_end_frame: MotionModule::end_frame(module_accessor),
+
+        jumps_used: WorkModule::get_int(
+            module_accessor,
+            *FIGHTER_INSTANCE_WORK_ID_INT_JUMP_COUNT,
+        ),
+        jumps_max: WorkModule::get_int(
+            module_accessor,
+            *FIGHTER_INSTANCE_WORK_ID_INT_JUMP_COUNT_MAX,
+        ),
     }
+}
 
+unsafe fn sample_state() {
     begin_write();
 
-    if entry_id == 0 {
-        SMASH_AI_SHARED_STATE.frame = SMASH_AI_SHARED_STATE.frame.wrapping_add(1);
-        SMASH_AI_SHARED_STATE.remaining_frames = get_remaining_time_as_frame();
-        SMASH_AI_SHARED_STATE.stage_id = stage_id();
+    let next_frame = SMASH_AI_SHARED_STATE.frame.wrapping_add(1);
+    SMASH_AI_SHARED_STATE.frame = next_frame;
+    SMASH_AI_SHARED_STATE.fighter_count = 0;
+    SMASH_AI_SHARED_STATE.remaining_frames = 0;
+    SMASH_AI_SHARED_STATE.stage_id = -1;
+    SMASH_AI_SHARED_STATE.flags = 0;
+    SMASH_AI_SHARED_STATE.fighters = [FighterState::EMPTY; MAX_FIGHTERS];
 
-        if FIGHTER_MANAGER_ADDR != 0 {
-            let mgr = *(FIGHTER_MANAGER_ADDR as *mut *mut app::FighterManager);
-            if !mgr.is_null() {
-                let entry_count = FighterManager::entry_count(mgr);
-                let in_match = entry_count > 0 && !FighterManager::is_result_mode(mgr);
-                SMASH_AI_SHARED_STATE.flags = if in_match { 1 } else { 0 };
-                SMASH_AI_SHARED_STATE.fighter_count =
-                    core::cmp::min(entry_count as usize, MAX_FIGHTERS) as u32;
-            }
+    let mgr = get_fighter_manager();
+    if !mgr.is_null() {
+        let entry_count_raw = FighterManager::entry_count(mgr);
+        let entry_count = if entry_count_raw > 0 {
+            core::cmp::min(entry_count_raw as usize, MAX_FIGHTERS)
+        } else {
+            0
+        };
+
+        let in_match = entry_count > 0 && !FighterManager::is_result_mode(mgr);
+        SMASH_AI_SHARED_STATE.fighter_count = entry_count as u32;
+        SMASH_AI_SHARED_STATE.flags = if in_match { 1 } else { 0 };
+
+        if in_match {
+            SMASH_AI_SHARED_STATE.remaining_frames = get_remaining_time_as_frame();
+            SMASH_AI_SHARED_STATE.stage_id = stage_id();
         }
-    }
 
-    let mut stocks = 0;
-    let mut is_cpu = false;
-
-    if FIGHTER_MANAGER_ADDR != 0 {
-        let mgr = *(FIGHTER_MANAGER_ADDR as *mut *mut app::FighterManager);
-        if !mgr.is_null() {
-            let info = FighterManager::get_fighter_information(mgr, app::FighterEntryID(entry_id as i32));
-            if !info.is_null() {
-                stocks = FighterInformation::stock_count(info);
-                is_cpu = FighterInformation::is_operation_cpu(info);
-            }
+        for entry_id in 0..entry_count {
+            SMASH_AI_SHARED_STATE.fighters[entry_id] =
+                sample_fighter(mgr, entry_id, next_frame);
         }
-    }
-
-    let state = &mut SMASH_AI_SHARED_STATE.fighters[entry_id];
-    state.sample_frame = SMASH_AI_SHARED_STATE.frame;
-    state.present = 1;
-    state.fighter_kind = app::utility::get_kind(&mut *module_accessor);
-    state.status_kind = StatusModule::status_kind(module_accessor);
-    state.situation_kind = StatusModule::situation_kind(module_accessor);
-    state.stocks = stocks as i32;
-    state.is_cpu = if is_cpu { 1 } else { 0 };
-
-    state.x = PostureModule::pos_x(module_accessor);
-    state.y = PostureModule::pos_y(module_accessor);
-    state.speed_x =
-        KineticModule::get_sum_speed_x(module_accessor, *KINETIC_ENERGY_RESERVE_ATTRIBUTE_MAIN);
-    state.speed_y =
-        KineticModule::get_sum_speed_y(module_accessor, *KINETIC_ENERGY_RESERVE_ATTRIBUTE_MAIN);
-    state.facing = PostureModule::lr(module_accessor);
-    state.percent = DamageModule::damage(module_accessor, 0);
-
-    state.motion_kind = MotionModule::motion_kind(module_accessor);
-    state.motion_frame = MotionModule::frame(module_accessor);
-    state.motion_end_frame = MotionModule::end_frame(module_accessor);
-
-    state.jumps_used =
-        WorkModule::get_int(module_accessor, *FIGHTER_INSTANCE_WORK_ID_INT_JUMP_COUNT);
-    state.jumps_max =
-        WorkModule::get_int(module_accessor, *FIGHTER_INSTANCE_WORK_ID_INT_JUMP_COUNT_MAX);
-
-    if SMASH_AI_SHARED_STATE.fighter_count < (entry_id + 1) as u32 {
-        SMASH_AI_SHARED_STATE.fighter_count = (entry_id + 1) as u32;
     }
 
     end_write();
 }
 
+unsafe extern "C" fn once_per_game_frame_hook(game_state_ptr: u64) {
+    if !ORIGINAL_ONCE_PER_GAME_FRAME.is_null() {
+        let original: OncePerGameFrameFn =
+            core::mem::transmute(ORIGINAL_ONCE_PER_GAME_FRAME);
+        original(game_state_ptr);
+    }
+
+    sample_state();
+}
+
 #[skyline::main(name = "smash_ai_state")]
 pub fn main() {
     unsafe {
-        skyline::nn::ro::LookupSymbol(
+        let result = skyline::nn::ro::LookupSymbol(
             &mut FIGHTER_MANAGER_ADDR,
             "_ZN3lib9SingletonIN3app14FighterManagerEE9instance_E\0"
                 .as_bytes()
                 .as_ptr(),
         );
-    }
 
-    Agent::new("fighter").on_line(Main, fighter_frame).install();
+        if result != 0 || FIGHTER_MANAGER_ADDR == 0 {
+            skyline::println!(
+                "[smash_ai_state] FighterManager lookup failed: result={:#x}, addr={:#x}",
+                result,
+                FIGHTER_MANAGER_ADDR
+            );
+            return;
+        }
+
+        let Some(target) = find_text_pattern(ONCE_PER_GAME_FRAME_PATTERN) else {
+            skyline::println!(
+                "[smash_ai_state] once-per-game-frame signature not found; exporter disabled"
+            );
+            return;
+        };
+
+        hooks::A64HookFunction(
+            target as *const core::ffi::c_void,
+            once_per_game_frame_hook as *const () as *const core::ffi::c_void,
+            &mut ORIGINAL_ONCE_PER_GAME_FRAME,
+        );
+
+        skyline::println!(
+            "[smash_ai_state] direct Skyline frame hook installed at {:#x}; Smashline is not required",
+            target
+        );
+    }
 }
