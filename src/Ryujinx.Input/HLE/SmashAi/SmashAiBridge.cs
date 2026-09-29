@@ -49,7 +49,7 @@ namespace Ryujinx.Input.HLE.SmashAi
             };
             _thread.Start();
 
-            Logger.Info?.Print(LogClass.Input, $"Smash AI bridge listening on 127.0.0.1:{Port}");
+            Logger.Info?.Print(LogClass.Hid, $"Smash AI bridge listening on 127.0.0.1:{Port}");
         }
 
         public static SmashAiBridge TryCreate(Switch device)
@@ -63,7 +63,7 @@ namespace Ryujinx.Input.HLE.SmashAi
 
             if (!int.TryParse(value, out int port) || port is < 0 or > 65535)
             {
-                Logger.Error?.Print(LogClass.Input, $"Invalid RYUJINX_SMASH_AI_PORT '{value}'. Expected 0-65535.");
+                Logger.Error?.Print(LogClass.Hid, $"Invalid RYUJINX_SMASH_AI_PORT '{value}'. Expected 0-65535.");
                 return null;
             }
 
@@ -73,7 +73,7 @@ namespace Ryujinx.Input.HLE.SmashAi
             }
             catch (SocketException ex)
             {
-                Logger.Error?.Print(LogClass.Input, $"Unable to start Smash AI bridge on port {port}: {ex.Message}");
+                Logger.Error?.Print(LogClass.Hid, $"Unable to start Smash AI bridge on port {port}: {ex.Message}");
                 return null;
             }
         }
@@ -228,7 +228,7 @@ namespace Ryujinx.Input.HLE.SmashAi
                 }
                 catch (Exception ex)
                 {
-                    Logger.Warning?.Print(LogClass.Input, $"Smash AI bridge error: {ex.Message}");
+                    Logger.Warning?.Print(LogClass.Hid, $"Smash AI bridge error: {ex.Message}");
                 }
             }
         }
