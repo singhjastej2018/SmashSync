@@ -23,10 +23,27 @@ jobs:
       - name: Publish Windows x64
         run: dotnet publish src/Ryujinx/Ryujinx.csproj -c Release -r win-x64 --self-contained true -o publish -p:Version=1.0.0-smash-ai
 
+      - name: Setup Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          target: x86_64-unknown-linux-gnu
+
+      - name: Install cargo-skyline
+        run: |
+          cargo install --git https://github.com/jam1garner/cargo-skyline --force
+          cargo-skyline skyline update-std
+
+      - name: Build SSBU guest state exporter
+        working-directory: tools/SmashAI/guest
+        run: cargo-skyline skyline build --release
+
       - name: Add Smash AI tools
         run: |
           mkdir -p publish/SmashAI-tools
-          cp tools/SmashAI/* publish/SmashAI-tools/
+          cp tools/SmashAI/test_bridge.py publish/SmashAI-tools/
+          cp tools/SmashAI/Launch-SmashAI.bat publish/SmashAI-tools/
+          cp tools/SmashAI/guest/target/aarch64-skyline-switch/release/libsmash_ai_state.nro publish/SmashAI-tools/
+          cp tools/SmashAI/guest/README.md publish/SmashAI-tools/GUEST-PLUGIN.md
           cp docs/SmashAI.md publish/SmashAI-tools/README.md
           cp tools/SmashAI/Launch-SmashAI.bat publish/Launch-SmashAI.bat
 
