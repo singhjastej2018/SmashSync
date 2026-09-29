@@ -3,6 +3,7 @@ using Ryujinx.Common;
 using Ryujinx.Cpu;
 using Ryujinx.HLE.HOS.Kernel.Memory;
 using Ryujinx.HLE.HOS.Kernel.Process;
+using Ryujinx.HLE.SmashAi;
 using Ryujinx.HLE.Loaders.Executables;
 using Ryujinx.Horizon.Common;
 using Ryujinx.Memory;
@@ -459,6 +460,10 @@ namespace Ryujinx.HLE.HOS.Services.Ro
                             info.NroMappedAddress = nroMappedAddress;
 
                             _nroInfos.Add(info);
+
+                            ulong dataAddress = nroMappedAddress + info.Executable.DataOffset;
+                            ulong dataSize = (ulong)info.Executable.Data.Length + info.Executable.BssSize;
+                            SmashAiGuestStateBridge.RegisterLoadedNroData(_owner, dataAddress, dataSize);
                         }
                     }
                 }
