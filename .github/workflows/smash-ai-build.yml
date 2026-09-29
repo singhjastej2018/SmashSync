@@ -6,6 +6,10 @@ on:
       - smash-ai
   workflow_dispatch:
 
+concurrency:
+  group: smash-ai-build
+  cancel-in-progress: true
+
 jobs:
   build-win-x64:
     runs-on: ubuntu-latest
