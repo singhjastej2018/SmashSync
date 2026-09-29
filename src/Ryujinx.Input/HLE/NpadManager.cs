@@ -3,7 +3,6 @@ using Ryujinx.Common.Configuration.Hid;
 using Ryujinx.Common.Configuration.Hid.Controller;
 using Ryujinx.Common.Configuration.Hid.Keyboard;
 using Ryujinx.HLE.HOS.Services.Hid;
-using Ryujinx.Input.HLE.SmashAi;
 using System;
 using System.Buffers;
 using System.Collections.Generic;
@@ -42,7 +41,6 @@ namespace Ryujinx.Input.HLE
         private bool _enableKeyboard;
         private bool _enableMouse;
         private Switch _device;
-        private SmashAiBridge _smashAiBridge;
         private SmashAiInputBridge _smashAiBridge;
         
         private readonly List<GamepadInput> _hleInputStates = [];
@@ -380,9 +378,6 @@ namespace Ryujinx.Input.HLE
             _device = device;
             _device.Configuration.RefreshInputConfig = RefreshInputConfigForHLE;
 
-            _smashAiBridge?.Dispose();
-            _smashAiBridge = SmashAiBridge.TryCreate(device);
-
             ReloadConfiguration(inputConfig, playerInputAssignments, enableKeyboard, enableMouse);
 
             _smashAiBridge?.Dispose();
@@ -437,17 +432,6 @@ namespace Ryujinx.Input.HLE
                     }
 
                     inputState.Buttons |= _device.Hid.UpdateStickButtons(inputState.LStick, inputState.RStick);
-                    if (_smashAiBridge?.TryGetOverride(playerIndex, out GamepadInput aiInput) == true)
-                    {
-                        inputState = aiInput;
-                        inputState.Buttons |= _device.Hid.UpdateStickButtons(inputState.LStick, inputState.RStick);
-
-                        // AI input currently has no motion component. Keep a valid identity-sized array
-                        // so the normal HID path remains safe for Pro Controller style inputs.
-                        motionState = default;
-                        motionState.Item1.Orientation = new float[9];
-                    }
-
                     inputState.PlayerId = playerIndex;
                     motionState.Item1.PlayerId = playerIndex;
 
@@ -541,9 +525,6 @@ namespace Ryujinx.Input.HLE
                 {
                     if (!_isDisposed)
                     {
-                        _smashAiBridge?.Dispose();
-                        _smashAiBridge = null;
-
                         _smashAiBridge?.Dispose();
                         _smashAiBridge = null;
 
