@@ -19,4 +19,4 @@ Current exported state:
 - in-match flag
 - per-fighter sample frame
 
-Install only the compiled `libsmash_ai_state.nro` under the normal Skyline plugin directory for SSBU. Do not install Smashline for SmashAI.
+Install only the compiled `libsmash_ai_state.nro` under the normal Skyline plugin directory for SSBU. Do not install Smashline for SmashAI; this exporter is standalone on top of Skyline.
