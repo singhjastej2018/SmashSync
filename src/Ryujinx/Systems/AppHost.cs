@@ -1148,6 +1148,12 @@ namespace Ryujinx.Ava.Systems
 
                         while (Device.ConsumeFrameAvailable())
                         {
+                            if (Device.SmashAiSuppressPresentation)
+                            {
+                                Device.DiscardPresentFrame();
+                                continue;
+                            }
+
                             if (!_renderingStarted)
                             {
                                 _renderingStarted = true;
