@@ -139,11 +139,18 @@ def prepare_worker_roots(
 
     for index in range(1, worker_count):
         destination = workers_root / f"worker-{index + 1}"
+        marker = destination / ".smashai-worker.json"
+        if destination.exists() and not marker.exists():
+            if progress:
+                progress(f"worker-{index + 1}: removing incomplete worker data")
+            shutil.rmtree(destination, ignore_errors=True)
+
         if not destination.exists():
             clone_portable(source, destination, progress=progress)
         else:
             if progress:
                 progress(f"worker-{index + 1}: existing data root reused")
+
         sync_runtime_files(source, destination)
         roots.append(destination.resolve())
 
