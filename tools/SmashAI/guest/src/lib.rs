@@ -215,6 +215,17 @@ unsafe fn sample_fighter(
         return FighterState::EMPTY;
     }
 
+    let fighter_kind = app::utility::get_kind(&mut *module_accessor);
+    let status_kind = StatusModule::status_kind(module_accessor);
+    let situation_kind = StatusModule::situation_kind(module_accessor);
+
+    // FighterManager can expose placeholder entries in Training Mode. They may
+    // have a non-null accessor but report kind/status -1. Do not publish those
+    // as real P1/P2/P3 fighters.
+    if fighter_kind < 0 || status_kind < 0 {
+        return FighterState::EMPTY;
+    }
+
     let info =
         FighterManager::get_fighter_information(mgr, app::FighterEntryID(entry_id as i32));
 
@@ -230,9 +241,9 @@ unsafe fn sample_fighter(
     FighterState {
         sample_frame: frame,
         present: 1,
-        fighter_kind: app::utility::get_kind(&mut *module_accessor),
-        status_kind: StatusModule::status_kind(module_accessor),
-        situation_kind: StatusModule::situation_kind(module_accessor),
+        fighter_kind,
+        status_kind,
+        situation_kind,
         stocks,
         is_cpu: if is_cpu { 1 } else { 0 },
 
@@ -286,18 +297,19 @@ unsafe fn sample_state() -> bool {
         };
 
         in_match = entry_count > 0 && !FighterManager::is_result_mode(mgr);
-        SMASH_AI_SHARED_STATE.fighter_count = entry_count as u32;
-
         if in_match {
             SMASH_AI_SHARED_STATE.flags |= FLAG_IN_MATCH;
             SMASH_AI_SHARED_STATE.remaining_frames = get_remaining_time_as_frame();
             SMASH_AI_SHARED_STATE.stage_id = stage_id();
         }
 
+        let mut present_count = 0u32;
+
         for entry_id in 0..entry_count {
             let fighter = sample_fighter(mgr, entry_id, next_frame);
 
             if fighter.present != 0 {
+                present_count += 1;
                 if fighter.status_kind == *FIGHTER_STATUS_KIND_DEAD {
                     SMASH_AI_SHARED_STATE.flags |= 1 << (FLAG_DEAD_BASE + entry_id as u32);
                 }
@@ -311,6 +323,8 @@ unsafe fn sample_state() -> bool {
 
             SMASH_AI_SHARED_STATE.fighters[entry_id] = fighter;
         }
+
+        SMASH_AI_SHARED_STATE.fighter_count = present_count;
     }
 
     end_write();
