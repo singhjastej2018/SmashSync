@@ -155,6 +155,11 @@ class SmashAiEnvTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<h", packet, 16)[0], 32767)
         self.assertEqual(struct.unpack_from("<h", packet, 18)[0], -32768)
 
+    def test_fast_mode_packet_layout(self):
+        packet = module.BRIDGE_MAGIC + bytes([module.MSG_FAST_MODE, 1])
+        self.assertEqual(packet, b"SAI1" + bytes([7, 1]))
+        self.assertEqual(module.MSG_FAST_MODE_RESPONSE, 0x87)
+
     def test_step_packet_layout(self):
         packet = module.BRIDGE_MAGIC + bytes([module.MSG_STEP_FRAMES]) + struct.pack("<I", 3)
         self.assertEqual(len(packet), 9)
