@@ -102,6 +102,7 @@ def main() -> int:
             observation, _ = env.reset(timeout=args.wait_match)
             if not args.normal_speed:
                 bridge.set_fast_mode(True)
+                bridge.set_presentation_enabled(False)
 
             expected_kind = metadata.get("fighter_kind")
             actual_kind = observation.fighters[args.fighter_slot].fighter_kind
@@ -177,6 +178,10 @@ def main() -> int:
             )
             return 0
         finally:
+            try:
+                bridge.set_presentation_enabled(True)
+            except Exception:
+                pass
             try:
                 bridge.set_fast_mode(False)
             except Exception:
