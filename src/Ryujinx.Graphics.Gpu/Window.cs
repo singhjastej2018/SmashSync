@@ -245,6 +245,27 @@ namespace Ryujinx.Graphics.Gpu
         }
 
         /// <summary>
+        /// Acquires and releases the next queued presentation buffer without
+        /// copying it to the host window. This is used by SmashAI accelerated
+        /// training workers that do not need to display every rendered frame.
+        /// Guest GPU commands still execute normally; only the final host
+        /// presentation work is skipped.
+        /// </summary>
+        public void DiscardPresent()
+        {
+            _context.AdvanceSequence();
+
+            if (_frameQueue.TryDequeue(out PresentationTexture pt))
+            {
+                // Preserve SurfaceFlinger fence/buffer lifecycle even though the
+                // image itself is not needed for host display.
+                pt.AcquireCallback(_context, pt.UserObj);
+                pt.Cache.Tick();
+                pt.ReleaseCallback(pt.UserObj);
+            }
+        }
+
+        /// <summary>
         /// Indicate that a frame on the queue is ready to be acquired.
         /// </summary>
         public void SignalFrameReady()
