@@ -534,6 +534,18 @@ class SmashAiEnv:
         if self.poll_interval:
             time.sleep(self.poll_interval)
 
+    def _observe_resilient(self, deadline: float) -> SmashObservation:
+        """Retry transient host reads while the guest is inside its seqlock write window."""
+        last_error: Optional[ObservationUnavailable] = None
+        while time.monotonic() < deadline:
+            try:
+                return self.bridge.observe()
+            except ObservationUnavailable as exc:
+                last_error = exc
+                self._sleep_poll()
+
+        raise StepTimeout("timed out waiting for a stable SSAI0001 observation") from last_error
+
     def _wait_for_match(self, timeout: float) -> SmashObservation:
         deadline = time.monotonic() + max(0.1, timeout)
         last_error: Optional[Exception] = None
@@ -556,7 +568,11 @@ class SmashAiEnv:
         deadline = time.monotonic() + (self.step_timeout if timeout is None else timeout)
         last: Optional[SmashObservation] = None
         while time.monotonic() < deadline:
-            current = self.bridge.observe()
+            try:
+                current = self.bridge.observe()
+            except ObservationUnavailable:
+                self._sleep_poll()
+                continue
             last = current
             if current.in_match and current.gate_enabled and current.gate_waiting:
                 return current
@@ -581,7 +597,7 @@ class SmashAiEnv:
         return self._wait_for_gate(timeout=max(self.step_timeout, 3.0))
 
     def _advance_exact(self, frames: int) -> SmashObservation:
-        before = self.bridge.observe()
+        before = self._observe_resilient(time.monotonic() + self.step_timeout)
         if not before.in_match:
             return before
         if not (before.gate_enabled and before.gate_waiting):
@@ -593,7 +609,11 @@ class SmashAiEnv:
         deadline = time.monotonic() + self.step_timeout
         last = before
         while time.monotonic() < deadline:
-            current = self.bridge.observe()
+            try:
+                current = self.bridge.observe()
+            except ObservationUnavailable:
+                self._sleep_poll()
+                continue
             last = current
             if not current.in_match:
                 return current
@@ -615,7 +635,9 @@ class SmashAiEnv:
         if not self.exact_step:
             raise ProtocolError("automatic Training Mode reset requires exact-step protocol v2")
 
-        current = self._ensure_exact_gate(self.bridge.observe())
+        current = self._ensure_exact_gate(
+            self._observe_resilient(time.monotonic() + self.step_timeout)
+        )
         if not current.in_match:
             raise StepTimeout("Training Mode reset requested while no active match is exported")
 
@@ -645,7 +667,11 @@ class SmashAiEnv:
         calls in reset_mode='training' press L+R+A for an automatic Reset
         Positions, then settle for a fixed number of exact game frames.
         """
-        observation = self._wait_for_match(timeout) if wait_for_match else self.bridge.observe()
+        observation = (
+            self._wait_for_match(timeout)
+            if wait_for_match
+            else self._observe_resilient(time.monotonic() + self.step_timeout)
+        )
         observation = self._ensure_exact_gate(observation)
 
         did_auto_reset = False
@@ -684,7 +710,11 @@ class SmashAiEnv:
             deadline = time.monotonic() + self.step_timeout
             current = previous
             while time.monotonic() < deadline:
-                current = self.bridge.observe()
+                try:
+                    current = self.bridge.observe()
+                except ObservationUnavailable:
+                    self._sleep_poll()
+                    continue
                 if current.frame >= target_frame or (previous.in_match and not current.in_match):
                     break
                 self._sleep_poll()
