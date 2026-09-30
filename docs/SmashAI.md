@@ -51,14 +51,18 @@ The model folder contains:
 
 ```
 latest.pt
+model.pt
 snapshot_000025.pt
 snapshot_000050.pt
 ...
 model.json
 ```
 
-`latest.pt` is the normal shareable weights/checkpoint file for the current
-build. Later ONNX export will provide a runtime-only portable model format.
+`latest.pt` contains model + optimizer state for seamless resume. `model.pt`
+is the smaller shareable runtime weights file. If a model folder already has
+`latest.pt`, pressing Start / Resume Training automatically resumes it unless
+a different checkpoint is explicitly selected. Later ONNX export will provide
+an even lighter runtime-only portable format.
 
 ### Playing against a trained model
 
