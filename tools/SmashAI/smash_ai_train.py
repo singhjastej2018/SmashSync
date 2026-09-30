@@ -147,8 +147,13 @@ def train(args) -> int:
             flush=True,
         )
 
-        if args.resume:
-            model, checkpoint = load_checkpoint(args.resume, device=device)
+        resume_path = args.resume
+        if not resume_path and (model_dir / "latest.pt").exists():
+            resume_path = str(model_dir / "latest.pt")
+            print(f"auto-resume: {resume_path}", flush=True)
+
+        if resume_path:
+            model, checkpoint = load_checkpoint(resume_path, device=device)
             metadata = dict(checkpoint["metadata"])
             previous_kind = metadata.get("fighter_kind")
             if previous_kind is not None and previous_kind != fighter_kind:
@@ -164,7 +169,7 @@ def train(args) -> int:
             environment_steps = int(checkpoint.get("environment_steps", 0))
             print(
                 f"resumed: update={update} env_steps={environment_steps} "
-                f"from {Path(args.resume).name}",
+                f"from {Path(resume_path).name}",
                 flush=True,
             )
         else:
