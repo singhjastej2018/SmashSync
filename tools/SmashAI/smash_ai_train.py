@@ -141,6 +141,11 @@ def train(args) -> int:
     try:
         observation, reset_info = env.reset(timeout=args.wait_match)
         bridge.set_fast_mode(True)
+        bridge.set_presentation_enabled(False)
+        print(
+            "training acceleration: unbounded pacing, audio muted, host presentation suppressed",
+            flush=True,
+        )
         fighter_kind = observation.fighters[args.fighter_slot].fighter_kind
         print(
             f"training match detected: fighter_kind={fighter_kind} "
@@ -427,6 +432,10 @@ def train(args) -> int:
         return 0
 
     finally:
+        try:
+            bridge.set_presentation_enabled(True)
+        except Exception:
+            pass
         try:
             bridge.set_fast_mode(False)
         except Exception:
