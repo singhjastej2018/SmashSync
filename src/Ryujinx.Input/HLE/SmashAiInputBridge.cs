@@ -26,11 +26,13 @@ namespace Ryujinx.Input.HLE
         private const byte MessageClear = 0x04;
         private const byte MessageFrameGate = 0x05;
         private const byte MessageStepFrames = 0x06;
+        private const byte MessageFastMode = 0x07;
 
         private const byte MessageObservationResponse = 0x82;
         private const byte MessagePong = 0x83;
         private const byte MessageFrameGateResponse = 0x85;
         private const byte MessageStepFramesResponse = 0x86;
+        private const byte MessageFastModeResponse = 0x87;
 
         private const int MaxControllers = 9;
         private const int ActionPacketSize = 24;
@@ -45,6 +47,9 @@ namespace Ryujinx.Input.HLE
         private readonly Thread _thread;
         private volatile bool _running;
         private bool _gateEnabled;
+        private bool _fastModeEnabled;
+        private Ryujinx.Common.Configuration.VSyncMode _savedVSyncMode;
+        private float _savedVolume;
         private long _lastTrainerPacketTimestamp;
 
         private SmashAiInputBridge(Switch device, int port)
@@ -176,6 +181,9 @@ namespace Ryujinx.Input.HLE
                     case MessageStepFrames:
                         HandleStepFrames(packet, remote);
                         break;
+                    case MessageFastMode:
+                        HandleFastMode(packet, remote);
+                        break;
                 }
             }
         }
@@ -266,6 +274,64 @@ namespace Ryujinx.Input.HLE
             SendStatus(remote, MessageStepFramesResponse, success);
         }
 
+        private void HandleFastMode(ReadOnlySpan<byte> packet, IPEndPoint remote)
+        {
+            if (packet.Length < 6)
+            {
+                SendStatus(remote, MessageFastModeResponse, false);
+                return;
+            }
+
+            bool enabled = packet[5] != 0;
+
+            try
+            {
+                if (enabled && !_fastModeEnabled)
+                {
+                    _savedVSyncMode = _device.VSyncMode;
+                    _savedVolume = _device.GetVolume();
+
+                    // Unbounded host presentation removes the normal 60 Hz pacing.
+                    // The protocol-v2 frame gate still preserves SSBU's exact virtual
+                    // frame semantics, so this changes wall-clock speed only.
+                    _device.VSyncMode = Ryujinx.Common.Configuration.VSyncMode.Unbounded;
+                    _device.UpdateVSyncInterval();
+                    _device.SetVolume(0f);
+                    _fastModeEnabled = true;
+
+                    Logger.Info?.Print(
+                        LogClass.Hid,
+                        "Smash AI fast mode enabled: unbounded presentation pacing, audio muted.");
+                }
+                else if (!enabled && _fastModeEnabled)
+                {
+                    RestoreFastMode();
+                }
+
+                SendStatus(remote, MessageFastModeResponse, true);
+            }
+            catch (Exception exception)
+            {
+                Logger.Warning?.Print(LogClass.Hid, $"Unable to change Smash AI fast mode: {exception.Message}");
+                SendStatus(remote, MessageFastModeResponse, false);
+            }
+        }
+
+        private void RestoreFastMode()
+        {
+            if (!_fastModeEnabled)
+            {
+                return;
+            }
+
+            _device.VSyncMode = _savedVSyncMode;
+            _device.UpdateVSyncInterval();
+            _device.SetVolume(_savedVolume);
+            _fastModeEnabled = false;
+
+            Logger.Info?.Print(LogClass.Hid, "Smash AI fast mode disabled; normal presentation pacing restored.");
+        }
+
         private void MaybeReleaseStaleGate()
         {
             if (!_gateEnabled)
@@ -282,6 +348,7 @@ namespace Ryujinx.Input.HLE
             if (_device.TrySetSmashAiFrameGate(false))
             {
                 _gateEnabled = false;
+                RestoreFastMode();
                 Logger.Warning?.Print(
                     LogClass.Hid,
                     "Smash AI exact-step gate released because the trainer was silent for 5 seconds.");
@@ -361,6 +428,8 @@ namespace Ryujinx.Input.HLE
                 _device.TrySetSmashAiFrameGate(false);
                 _gateEnabled = false;
             }
+
+            RestoreFastMode();
 
             _udp.Dispose();
 
