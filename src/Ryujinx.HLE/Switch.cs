@@ -181,6 +181,16 @@ namespace Ryujinx.HLE
             return _smashAiGuestStateBridge.TryRead(destination, out bytesWritten);
         }
 
+        public bool TrySetSmashAiFrameGate(bool enabled)
+        {
+            return _smashAiGuestStateBridge.TrySetFrameGate(enabled);
+        }
+
+        public bool TryStepSmashAiFrames(uint frames)
+        {
+            return _smashAiGuestStateBridge.TryStepFrames(frames);
+        }
+
         public bool WaitFifo() => Gpu.GPFifo.WaitForCommands();
         public bool ConsumeFrameAvailable() => Gpu.Window.ConsumeFrameAvailable();
         public void PresentFrame(Action swapBuffersCallback) => Gpu.Window.Present(swapBuffersCallback);
