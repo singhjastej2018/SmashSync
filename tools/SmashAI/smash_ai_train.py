@@ -14,6 +14,7 @@ import json
 import math
 import os
 import random
+import threading
 import time
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -49,6 +50,25 @@ def wait_for_bridge(port: int, timeout: float) -> BridgeClient:
     raise RuntimeError(
         f"Ryujinx bridge did not appear on UDP {port} within {timeout:.0f}s"
     ) from last_error
+
+
+def start_bridge_keepalive(port: int):
+    stop = threading.Event()
+
+    def loop() -> None:
+        bridge = BridgeClient(port=port, timeout=0.5, retries=1)
+        try:
+            while not stop.wait(1.0):
+                try:
+                    bridge.ping()
+                except Exception:
+                    pass
+        finally:
+            bridge.close()
+
+    thread = threading.Thread(target=loop, name="SmashAI.KeepAlive", daemon=True)
+    thread.start()
+    return stop, thread
 
 
 def move_optimizer_to_device(optimizer, device) -> None:
@@ -100,6 +120,7 @@ def train(args) -> int:
         flush=True,
     )
     bridge = wait_for_bridge(args.port, args.wait_bridge)
+    keepalive_stop, keepalive_thread = start_bridge_keepalive(args.port)
     print("bridge: online; waiting for active Training Mode match...", flush=True)
 
     env = SmashAiEnv(
@@ -336,6 +357,17 @@ def train(args) -> int:
                     environment_steps=environment_steps,
                     extra=extra,
                 )
+                # model.pt is the smaller shareable runtime weights file; latest.pt
+                # additionally keeps optimizer state for resume.
+                save_checkpoint(
+                    model_dir / "model.pt",
+                    model=model,
+                    optimizer=None,
+                    metadata=metadata,
+                    update=update,
+                    environment_steps=environment_steps,
+                    extra=extra,
+                )
                 if update % args.snapshot_every == 0:
                     save_checkpoint(
                         model_dir / f"snapshot_{update:06d}.pt",
@@ -352,6 +384,11 @@ def train(args) -> int:
         return 0
 
     finally:
+        try:
+            keepalive_stop.set()
+            keepalive_thread.join(timeout=2.0)
+        except Exception:
+            pass
         env.close()
         bridge.close()
 
