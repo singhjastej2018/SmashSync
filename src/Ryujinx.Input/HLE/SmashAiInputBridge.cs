@@ -27,12 +27,14 @@ namespace Ryujinx.Input.HLE
         private const byte MessageFrameGate = 0x05;
         private const byte MessageStepFrames = 0x06;
         private const byte MessageFastMode = 0x07;
+        private const byte MessagePresentation = 0x08;
 
         private const byte MessageObservationResponse = 0x82;
         private const byte MessagePong = 0x83;
         private const byte MessageFrameGateResponse = 0x85;
         private const byte MessageStepFramesResponse = 0x86;
         private const byte MessageFastModeResponse = 0x87;
+        private const byte MessagePresentationResponse = 0x88;
 
         private const int MaxControllers = 9;
         private const int ActionPacketSize = 24;
@@ -184,6 +186,9 @@ namespace Ryujinx.Input.HLE
                     case MessageFastMode:
                         HandleFastMode(packet, remote);
                         break;
+                    case MessagePresentation:
+                        HandlePresentation(packet, remote);
+                        break;
                 }
             }
         }
@@ -319,6 +324,26 @@ namespace Ryujinx.Input.HLE
             }
         }
 
+        private void HandlePresentation(ReadOnlySpan<byte> packet, IPEndPoint remote)
+        {
+            if (packet.Length < 6)
+            {
+                SendStatus(remote, MessagePresentationResponse, false);
+                return;
+            }
+
+            bool enabled = packet[5] != 0;
+            _device.SmashAiSuppressPresentation = !enabled;
+
+            Logger.Info?.Print(
+                LogClass.Hid,
+                enabled
+                    ? "Smash AI host presentation enabled."
+                    : "Smash AI host presentation suppressed for training.");
+
+            SendStatus(remote, MessagePresentationResponse, true);
+        }
+
         private void RestoreFastMode()
         {
             if (!_fastModeEnabled)
@@ -351,6 +376,7 @@ namespace Ryujinx.Input.HLE
             if (_device.TrySetSmashAiFrameGate(false))
             {
                 _gateEnabled = false;
+                _device.SmashAiSuppressPresentation = false;
                 RestoreFastMode();
                 Logger.Warning?.Print(
                     LogClass.Hid,
@@ -432,6 +458,7 @@ namespace Ryujinx.Input.HLE
                 _gateEnabled = false;
             }
 
+            _device.SmashAiSuppressPresentation = false;
             RestoreFastMode();
 
             _udp.Dispose();
