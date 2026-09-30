@@ -11,8 +11,8 @@ namespace Ryujinx.HLE.SmashAi
 {
     /// <summary>
     /// Discovers and reads the fixed Smash AI observation block exported by the
-    /// companion SSBU plugin. Discovery is intentionally host-side so the trainer
-    /// never needs version-specific guest addresses.
+    /// companion SSBU plugin. Protocol v2 also exposes a small host-writable
+    /// control tail used for exact game-frame gating.
     /// </summary>
     internal sealed class SmashAiGuestStateBridge
     {
@@ -20,6 +20,18 @@ namespace Ryujinx.HLE.SmashAi
 
         public const int HeaderSize = 24;
         public const int MaxStateSize = 16 * 1024;
+
+        private const uint MinProtocolVersion = 1;
+        private const uint MaxProtocolVersion = 2;
+
+        // Protocol-v1 state ends at byte 288. Protocol v2 appends four u32s:
+        // gate_enabled, step_budget, gate_epoch, gate_waiting.
+        private const int ProtocolV2ControlOffset = 288;
+        private const int ProtocolV2StateSize = 304;
+        private const ulong GateEnabledOffset = ProtocolV2ControlOffset + 0;
+        private const ulong StepBudgetOffset = ProtocolV2ControlOffset + 4;
+        private const ulong GateWaitingOffset = ProtocolV2ControlOffset + 12;
+        private const uint MaxStepFrames = 6000;
 
         private const int ScanChunkSize = 64 * 1024;
         private const ulong PreferredPluginRegionMaxSize = 16UL * 1024 * 1024;
@@ -44,9 +56,7 @@ namespace Ryujinx.HLE.SmashAi
         {
             bytesWritten = 0;
 
-            ProcessResult activeApplication = _device.Processes.ActiveApplication;
-            if (activeApplication == null ||
-                !_device.System.KernelContext.Processes.TryGetValue(activeApplication.ProcessId, out KProcess process))
+            if (!TryGetActiveProcess(out KProcess process))
             {
                 ResetCache();
                 return false;
@@ -94,6 +104,146 @@ namespace Ryujinx.HLE.SmashAi
             }
 
             return false;
+        }
+
+        public bool TrySetFrameGate(bool enabled)
+        {
+            if (!TryResolveProtocolV2Control(out KProcess process, out ulong address))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (enabled)
+                {
+                    // Budget must be zero before enabling, otherwise the first gated
+                    // boundary could consume a stale step request.
+                    process.CpuMemory.Write(address + StepBudgetOffset, 0u);
+                    process.CpuMemory.Write(address + GateEnabledOffset, 1u);
+                }
+                else
+                {
+                    // Release a blocked guest frame thread first, then clear budget.
+                    process.CpuMemory.Write(address + GateEnabledOffset, 0u);
+                    process.CpuMemory.Write(address + StepBudgetOffset, 0u);
+                }
+
+                return true;
+            }
+            catch (InvalidMemoryRegionException)
+            {
+                _cachedAddress = 0;
+                return false;
+            }
+        }
+
+        public bool TryStepFrames(uint frames)
+        {
+            if (frames == 0 || frames > MaxStepFrames ||
+                !TryResolveProtocolV2Control(out KProcess process, out ulong address))
+            {
+                return false;
+            }
+
+            try
+            {
+                uint enabled = process.CpuMemory.Read<uint>(address + GateEnabledOffset);
+                uint budget = process.CpuMemory.Read<uint>(address + StepBudgetOffset);
+                uint waiting = process.CpuMemory.Read<uint>(address + GateWaitingOffset);
+
+                // Only release from a known stable frame boundary. This is what makes
+                // protocol-v2 stepping exact rather than a host-side polling race.
+                if (enabled != 1 || waiting != 1 || budget != 0)
+                {
+                    return false;
+                }
+
+                process.CpuMemory.Write(address + StepBudgetOffset, frames);
+                return true;
+            }
+            catch (InvalidMemoryRegionException)
+            {
+                _cachedAddress = 0;
+                return false;
+            }
+        }
+
+        private bool TryResolveProtocolV2Control(out KProcess process, out ulong address)
+        {
+            address = 0;
+
+            if (!TryGetActiveProcess(out process))
+            {
+                return false;
+            }
+
+            if (_cachedPid != process.Pid)
+            {
+                ResetCache();
+                _cachedPid = process.Pid;
+            }
+
+            if (_cachedAddress == 0 &&
+                TryGetRegisteredAddress(process.Pid, out ulong registeredAddress))
+            {
+                _cachedAddress = registeredAddress;
+            }
+
+            if (_cachedAddress == 0)
+            {
+                byte[] rented = ArrayPool<byte>.Shared.Rent(MaxStateSize);
+                try
+                {
+                    if (!TryRead(rented.AsSpan(0, MaxStateSize), out _))
+                    {
+                        return false;
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(rented);
+                }
+            }
+
+            address = _cachedAddress;
+            if (address == 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                Span<byte> header = stackalloc byte[16];
+                process.CpuMemory.Read(address, header);
+
+                if (!header[..8].SequenceEqual(Magic))
+                {
+                    return false;
+                }
+
+                uint protocolVersion = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(8, 4));
+                int totalSize = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(12, 4));
+
+                return protocolVersion >= 2 &&
+                    protocolVersion <= MaxProtocolVersion &&
+                    totalSize >= ProtocolV2StateSize &&
+                    totalSize <= MaxStateSize;
+            }
+            catch (InvalidMemoryRegionException)
+            {
+                _cachedAddress = 0;
+                return false;
+            }
+        }
+
+        private bool TryGetActiveProcess(out KProcess process)
+        {
+            process = null;
+
+            ProcessResult activeApplication = _device.Processes.ActiveApplication;
+            return activeApplication != null &&
+                _device.System.KernelContext.Processes.TryGetValue(activeApplication.ProcessId, out process);
         }
 
         internal static void RegisterLoadedNroData(KProcess process, ulong dataAddress, ulong dataSize)
@@ -196,7 +346,8 @@ namespace Ryujinx.HLE.SmashAi
                 int totalSize = BinaryPrimitives.ReadInt32LittleEndian(header.Slice(12, 4));
                 uint sequenceBefore = BinaryPrimitives.ReadUInt32LittleEndian(header.Slice(16, 4));
 
-                if (protocolVersion != 1 ||
+                if (protocolVersion < MinProtocolVersion ||
+                    protocolVersion > MaxProtocolVersion ||
                     totalSize < HeaderSize ||
                     totalSize > MaxStateSize ||
                     totalSize > destination.Length ||
@@ -251,12 +402,7 @@ namespace Ryujinx.HLE.SmashAi
 
                     KMemoryInfo.Pool.Release(info);
 
-                    if (regionType == MemoryState.Reserved)
-                    {
-                        break;
-                    }
-
-                    if (regionSize == 0)
+                    if (regionType == MemoryState.Reserved || regionSize == 0)
                     {
                         break;
                     }
