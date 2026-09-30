@@ -36,12 +36,14 @@ MSG_CLEAR = 0x04
 MSG_FRAME_GATE = 0x05
 MSG_STEP_FRAMES = 0x06
 MSG_FAST_MODE = 0x07
+MSG_PRESENTATION = 0x08
 
 MSG_OBSERVATION_RESPONSE = 0x82
 MSG_PONG = 0x83
 MSG_FRAME_GATE_RESPONSE = 0x85
 MSG_STEP_FRAMES_RESPONSE = 0x86
 MSG_FAST_MODE_RESPONSE = 0x87
+MSG_PRESENTATION_RESPONSE = 0x88
 
 FLAG_IN_MATCH = 1 << 0
 FLAG_DEAD_BASE = 8
@@ -437,6 +439,20 @@ class BridgeClient:
         """
         packet = BRIDGE_MAGIC + bytes([MSG_FAST_MODE, 1 if enabled else 0])
         self._request_status(packet, MSG_FAST_MODE_RESPONSE, "fast mode change")
+
+    def set_presentation_enabled(self, enabled: bool) -> None:
+        """Enable or suppress final host-window presentation.
+
+        Suppression keeps guest GPU work and buffer lifetimes active but skips
+        copying the final frame to the host window. It is intended for hidden
+        training workers.
+        """
+        packet = BRIDGE_MAGIC + bytes([MSG_PRESENTATION, 1 if enabled else 0])
+        self._request_status(
+            packet,
+            MSG_PRESENTATION_RESPONSE,
+            "presentation change",
+        )
 
 
 @dataclass(frozen=True)
