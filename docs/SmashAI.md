@@ -1,5 +1,86 @@
 # Smash AI experimental branch
 
+## Desktop launcher and first PPO trainer
+
+The packaged build now includes a lightweight Windows launcher:
+
+```bat
+SmashAI.bat
+```
+
+The launcher has three tabs:
+
+- **Train**: starts Ryujinx if needed, waits for the bridge/match, then starts a
+  single-worker PPO learner. The user only needs to enter Training Mode, choose
+  the trainee as P1, choose an active CPU opponent and stage, and enter the
+  match. Exact stepping and Training resets are automatic after that.
+- **Play with AI**: loads a saved `.pt` checkpoint, waits through menus and
+  character select, and takes over P1/P2/P3 only after `in_match=True`.
+- **Setup / Status**: launches Ryujinx, checks the bridge/exporter, and installs
+  the optional PyTorch/DirectML dependencies.
+
+For AMD/Intel GPU training, run:
+
+```bat
+Install-SmashAI-ML.bat
+```
+
+This installs the DirectML PyTorch backend used by the first learner. The UI
+itself and bridge tests do not require PyTorch.
+
+### Training flow
+
+A new model can be trained from the UI with **Start / Resume Training**. The
+trainer automatically detects the P1 fighter kind when the match starts and
+stores it in checkpoint metadata.
+
+The first PPO action table has 40 controller macros covering neutral movement,
+8-way movement, A/B plus stick directions, jump/drift, shield/defensive
+movement, shoulder inputs, and right-stick attacks. The policy receives a
+55-value normalized state vector with the controlled fighter encoded first.
+
+The first learner is intentionally single-worker. It uses:
+
+- protocol-v2 exact 3-frame stepping by default,
+- automatic Training Mode episode reset,
+- PPO with generalized advantage estimation,
+- checkpoint/resume,
+- periodic snapshot files for later self-play.
+
+The model folder contains:
+
+```
+latest.pt
+snapshot_000025.pt
+snapshot_000050.pt
+...
+model.json
+```
+
+`latest.pt` is the normal shareable weights/checkpoint file for the current
+build. Later ONNX export will provide a runtime-only portable model format.
+
+### Playing against a trained model
+
+In the launcher, choose **Play with AI**, select a checkpoint and which player
+the AI controls, then start the mode. The launcher starts Ryujinx if necessary.
+
+The policy does not override input in menus. This allows a human to navigate
+Smash and choose characters normally. For example, for human P1 versus AI P2:
+
+1. keep Ryujinx P1 and P2 controller slots configured,
+2. use the normal controller/keyboard to put both players into character select,
+3. choose P1 and P2 characters normally,
+4. start the match,
+5. the policy takes over P2 only after the exporter reports an active match.
+
+When the match ends, the override is cleared and the process waits for the next
+match.
+
+The current checkpoint contains character metadata. Using it with a different
+fighter is allowed for experimentation, but the runtime prints a warning because
+a single-character checkpoint may not generalize.
+
 This branch turns Ryujinx into a local SSBU reinforcement-learning environment.
 
 ## Current automated-training milestone
