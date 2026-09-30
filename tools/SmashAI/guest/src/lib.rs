@@ -1,9 +1,20 @@
 use smash::app::{self, lua_bind::*};
 use smash::lib::lua_const::*;
 use skyline::hooks::{self, Region};
+use std::time::Duration;
 
 const MAX_FIGHTERS: usize = 3;
-const PROTOCOL_VERSION: u32 = 1;
+const PROTOCOL_VERSION: u32 = 2;
+
+const FLAG_IN_MATCH: u32 = 1 << 0;
+const FLAG_DEAD_BASE: u32 = 8;
+const FLAG_REBIRTH_BASE: u32 = 12;
+const FLAG_ENTRY_BASE: u32 = 16;
+
+// Protocol-v2 host control fields are appended after the v1 288-byte payload.
+// The host may write gate_enabled/step_budget. The guest owns gate_epoch/waiting.
+const CONTROL_DISABLED: u32 = 0;
+const CONTROL_ENABLED: u32 = 1;
 
 // Signature for SSBU's once-per-game-frame function. This is searched at runtime
 // instead of using a fixed game-version offset, so the exporter does not need
@@ -93,6 +104,12 @@ pub struct SharedState {
     pub reserved: u32,
 
     pub fighters: [FighterState; MAX_FIGHTERS],
+
+    // Protocol v2 host/guest control. These four fields start at byte 288.
+    pub gate_enabled: u32,
+    pub step_budget: u32,
+    pub gate_epoch: u32,
+    pub gate_waiting: u32,
 }
 
 impl SharedState {
@@ -109,6 +126,10 @@ impl SharedState {
             flags: 0,
             reserved: 0,
             fighters: [FighterState::EMPTY; MAX_FIGHTERS],
+            gate_enabled: CONTROL_DISABLED,
+            step_budget: 0,
+            gate_epoch: 0,
+            gate_waiting: 0,
         }
     }
 }
@@ -132,6 +153,16 @@ unsafe fn begin_write() {
 unsafe fn end_write() {
     core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::Release);
     SMASH_AI_SHARED_STATE.sequence = SMASH_AI_SHARED_STATE.sequence.wrapping_add(1) & !1;
+}
+
+#[inline]
+unsafe fn read_control_u32(ptr: *const u32) -> u32 {
+    core::ptr::read_volatile(ptr)
+}
+
+#[inline]
+unsafe fn write_control_u32(ptr: *mut u32, value: u32) {
+    core::ptr::write_volatile(ptr, value);
 }
 
 unsafe fn find_text_pattern(pattern: &[u8]) -> Option<usize> {
@@ -233,7 +264,7 @@ unsafe fn sample_fighter(
     }
 }
 
-unsafe fn sample_state() {
+unsafe fn sample_state() -> bool {
     begin_write();
 
     let next_frame = SMASH_AI_SHARED_STATE.frame.wrapping_add(1);
@@ -244,6 +275,7 @@ unsafe fn sample_state() {
     SMASH_AI_SHARED_STATE.flags = 0;
     SMASH_AI_SHARED_STATE.fighters = [FighterState::EMPTY; MAX_FIGHTERS];
 
+    let mut in_match = false;
     let mgr = get_fighter_manager();
     if !mgr.is_null() {
         let entry_count_raw = FighterManager::entry_count(mgr);
@@ -253,22 +285,80 @@ unsafe fn sample_state() {
             0
         };
 
-        let in_match = entry_count > 0 && !FighterManager::is_result_mode(mgr);
+        in_match = entry_count > 0 && !FighterManager::is_result_mode(mgr);
         SMASH_AI_SHARED_STATE.fighter_count = entry_count as u32;
-        SMASH_AI_SHARED_STATE.flags = if in_match { 1 } else { 0 };
 
         if in_match {
+            SMASH_AI_SHARED_STATE.flags |= FLAG_IN_MATCH;
             SMASH_AI_SHARED_STATE.remaining_frames = get_remaining_time_as_frame();
             SMASH_AI_SHARED_STATE.stage_id = stage_id();
         }
 
         for entry_id in 0..entry_count {
-            SMASH_AI_SHARED_STATE.fighters[entry_id] =
-                sample_fighter(mgr, entry_id, next_frame);
+            let fighter = sample_fighter(mgr, entry_id, next_frame);
+
+            if fighter.present != 0 {
+                if fighter.status_kind == *FIGHTER_STATUS_KIND_DEAD {
+                    SMASH_AI_SHARED_STATE.flags |= 1 << (FLAG_DEAD_BASE + entry_id as u32);
+                }
+                if fighter.status_kind == *FIGHTER_STATUS_KIND_REBIRTH {
+                    SMASH_AI_SHARED_STATE.flags |= 1 << (FLAG_REBIRTH_BASE + entry_id as u32);
+                }
+                if fighter.status_kind == *FIGHTER_STATUS_KIND_ENTRY {
+                    SMASH_AI_SHARED_STATE.flags |= 1 << (FLAG_ENTRY_BASE + entry_id as u32);
+                }
+            }
+
+            SMASH_AI_SHARED_STATE.fighters[entry_id] = fighter;
         }
     }
 
     end_write();
+    in_match
+}
+
+unsafe fn gate_at_frame_boundary(in_match: bool) {
+    let enabled_ptr = core::ptr::addr_of!(SMASH_AI_SHARED_STATE.gate_enabled);
+    let enabled_mut = core::ptr::addr_of_mut!(SMASH_AI_SHARED_STATE.gate_enabled);
+    let budget_ptr = core::ptr::addr_of!(SMASH_AI_SHARED_STATE.step_budget);
+    let budget_mut = core::ptr::addr_of_mut!(SMASH_AI_SHARED_STATE.step_budget);
+    let epoch_ptr = core::ptr::addr_of!(SMASH_AI_SHARED_STATE.gate_epoch);
+    let epoch_mut = core::ptr::addr_of_mut!(SMASH_AI_SHARED_STATE.gate_epoch);
+    let waiting_mut = core::ptr::addr_of_mut!(SMASH_AI_SHARED_STATE.gate_waiting);
+
+    if !in_match || read_control_u32(enabled_ptr) != CONTROL_ENABLED {
+        write_control_u32(waiting_mut, 0);
+        return;
+    }
+
+    let budget = read_control_u32(budget_ptr);
+    if budget > 0 {
+        let remaining = budget - 1;
+        write_control_u32(budget_mut, remaining);
+
+        if remaining > 0 {
+            write_control_u32(waiting_mut, 0);
+            return;
+        }
+    }
+
+    // We are at a stable SSBU frame boundary. Keep the game-frame thread here
+    // until the host supplies a positive step budget or disables the gate.
+    write_control_u32(waiting_mut, 1);
+    write_control_u32(
+        epoch_mut,
+        read_control_u32(epoch_ptr).wrapping_add(1),
+    );
+
+    while read_control_u32(enabled_ptr) == CONTROL_ENABLED
+        && read_control_u32(budget_ptr) == 0
+    {
+        // Sleeping this one guest thread avoids burning a host core while still
+        // leaving the exporter memory readable from Ryujinx's host bridge.
+        std::thread::sleep(Duration::from_micros(100));
+    }
+
+    write_control_u32(waiting_mut, 0);
 }
 
 unsafe extern "C" fn once_per_game_frame_hook(game_state_ptr: u64) {
@@ -278,7 +368,8 @@ unsafe extern "C" fn once_per_game_frame_hook(game_state_ptr: u64) {
         original(game_state_ptr);
     }
 
-    sample_state();
+    let in_match = sample_state();
+    gate_at_frame_boundary(in_match);
 }
 
 #[skyline::main(name = "smash_ai_state")]
@@ -314,7 +405,7 @@ pub fn main() {
         );
 
         skyline::println!(
-            "[smash_ai_state] direct Skyline frame hook installed at {:#x}; Smashline is not required",
+            "[smash_ai_state] protocol v2 direct frame hook installed at {:#x}; exact-step gate available",
             target
         );
     }
