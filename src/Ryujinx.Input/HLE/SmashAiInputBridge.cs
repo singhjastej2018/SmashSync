@@ -2,6 +2,7 @@ using Ryujinx.Common.Logging;
 using Ryujinx.HLE.HOS.Services.Hid;
 using System;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
@@ -11,11 +12,9 @@ using PlayerIndex = Ryujinx.HLE.HOS.Services.Hid.PlayerIndex;
 namespace Ryujinx.Input.HLE
 {
     /// <summary>
-    /// Minimal localhost-only bridge used by the Smash AI trainer.
-    ///
-    /// Enable by setting SMASH_AI_PORT to a UDP port before launching Ryujinx.
-    /// The trainer can then inject controller states and request the raw guest
-    /// observation block exported by the companion SSBU plugin.
+    /// Localhost-only bridge used by the Smash AI trainer.
+    /// Supports controller override, observations, and protocol-v2 exact
+    /// game-frame gating through the companion SSBU exporter.
     /// </summary>
     internal sealed class SmashAiInputBridge : IDisposable
     {
@@ -25,12 +24,17 @@ namespace Ryujinx.Input.HLE
         private const byte MessageObservationRequest = 0x02;
         private const byte MessagePing = 0x03;
         private const byte MessageClear = 0x04;
+        private const byte MessageFrameGate = 0x05;
+        private const byte MessageStepFrames = 0x06;
 
         private const byte MessageObservationResponse = 0x82;
         private const byte MessagePong = 0x83;
+        private const byte MessageFrameGateResponse = 0x85;
+        private const byte MessageStepFramesResponse = 0x86;
 
         private const int MaxControllers = 9;
         private const int ActionPacketSize = 24;
+        private const int GateWatchdogSeconds = 5;
 
         private readonly object _inputLock = new();
         private readonly GamepadInput[] _inputs = new GamepadInput[MaxControllers];
@@ -40,6 +44,8 @@ namespace Ryujinx.Input.HLE
         private readonly UdpClient _udp;
         private readonly Thread _thread;
         private volatile bool _running;
+        private bool _gateEnabled;
+        private long _lastTrainerPacketTimestamp;
 
         private SmashAiInputBridge(Switch device, int port)
         {
@@ -48,6 +54,7 @@ namespace Ryujinx.Input.HLE
             _udp.Client.ReceiveTimeout = 500;
 
             _running = true;
+            _lastTrainerPacketTimestamp = Stopwatch.GetTimestamp();
             _thread = new Thread(ReceiveLoop)
             {
                 IsBackground = true,
@@ -122,6 +129,7 @@ namespace Ryujinx.Input.HLE
                 }
                 catch (SocketException exception) when (exception.SocketErrorCode == SocketError.TimedOut)
                 {
+                    MaybeReleaseStaleGate();
                     continue;
                 }
                 catch (ObjectDisposedException)
@@ -132,16 +140,21 @@ namespace Ryujinx.Input.HLE
                 {
                     if (_running)
                     {
+                        MaybeReleaseStaleGate();
                         continue;
                     }
 
                     break;
                 }
 
-                if (!IPAddress.IsLoopback(remote.Address) || packet.Length < 5 || !packet.AsSpan(0, 4).SequenceEqual(Magic))
+                if (!IPAddress.IsLoopback(remote.Address) ||
+                    packet.Length < 5 ||
+                    !packet.AsSpan(0, 4).SequenceEqual(Magic))
                 {
                     continue;
                 }
+
+                _lastTrainerPacketTimestamp = Stopwatch.GetTimestamp();
 
                 switch (packet[4])
                 {
@@ -156,6 +169,12 @@ namespace Ryujinx.Input.HLE
                         break;
                     case MessageClear:
                         HandleClear(packet);
+                        break;
+                    case MessageFrameGate:
+                        HandleFrameGate(packet, remote);
+                        break;
+                    case MessageStepFrames:
+                        HandleStepFrames(packet, remote);
                         break;
                 }
             }
@@ -215,6 +234,60 @@ namespace Ryujinx.Input.HLE
             }
         }
 
+        private void HandleFrameGate(ReadOnlySpan<byte> packet, IPEndPoint remote)
+        {
+            if (packet.Length < 6)
+            {
+                SendStatus(remote, MessageFrameGateResponse, false);
+                return;
+            }
+
+            bool enabled = packet[5] != 0;
+            bool success = _device.TrySetSmashAiFrameGate(enabled);
+
+            if (success)
+            {
+                _gateEnabled = enabled;
+            }
+
+            SendStatus(remote, MessageFrameGateResponse, success);
+        }
+
+        private void HandleStepFrames(ReadOnlySpan<byte> packet, IPEndPoint remote)
+        {
+            if (packet.Length < 9)
+            {
+                SendStatus(remote, MessageStepFramesResponse, false);
+                return;
+            }
+
+            uint frames = BinaryPrimitives.ReadUInt32LittleEndian(packet.Slice(5, 4));
+            bool success = _device.TryStepSmashAiFrames(frames);
+            SendStatus(remote, MessageStepFramesResponse, success);
+        }
+
+        private void MaybeReleaseStaleGate()
+        {
+            if (!_gateEnabled)
+            {
+                return;
+            }
+
+            long elapsedTicks = Stopwatch.GetTimestamp() - _lastTrainerPacketTimestamp;
+            if (elapsedTicks < GateWatchdogSeconds * Stopwatch.Frequency)
+            {
+                return;
+            }
+
+            if (_device.TrySetSmashAiFrameGate(false))
+            {
+                _gateEnabled = false;
+                Logger.Warning?.Print(
+                    LogClass.Hid,
+                    "Smash AI exact-step gate released because the trainer was silent for 5 seconds.");
+            }
+        }
+
         private void SendObservation(IPEndPoint remote)
         {
             byte[] state = new byte[16 * 1024];
@@ -252,6 +325,21 @@ namespace Ryujinx.Input.HLE
             Magic.CopyTo(response, 0);
             response[4] = messageType;
 
+            TrySend(response, remote);
+        }
+
+        private void SendStatus(IPEndPoint remote, byte messageType, bool success)
+        {
+            byte[] response = new byte[6];
+            Magic.CopyTo(response, 0);
+            response[4] = messageType;
+            response[5] = success ? (byte)0 : (byte)1;
+
+            TrySend(response, remote);
+        }
+
+        private void TrySend(byte[] response, IPEndPoint remote)
+        {
             try
             {
                 _udp.Send(response, response.Length, remote);
@@ -267,6 +355,13 @@ namespace Ryujinx.Input.HLE
         public void Dispose()
         {
             _running = false;
+
+            if (_gateEnabled)
+            {
+                _device.TrySetSmashAiFrameGate(false);
+                _gateEnabled = false;
+            }
+
             _udp.Dispose();
 
             if (Thread.CurrentThread != _thread)
