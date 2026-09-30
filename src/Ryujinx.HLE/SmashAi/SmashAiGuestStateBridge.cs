@@ -6,6 +6,7 @@ using System;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
+using System.Threading;
 
 namespace Ryujinx.HLE.SmashAi
 {
@@ -32,6 +33,7 @@ namespace Ryujinx.HLE.SmashAi
         private const ulong StepBudgetOffset = ProtocolV2ControlOffset + 4;
         private const ulong GateWaitingOffset = ProtocolV2ControlOffset + 12;
         private const uint MaxStepFrames = 6000;
+        private const int StableReadAttempts = 6;
 
         private const int ScanChunkSize = 64 * 1024;
         private const ulong PreferredPluginRegionMaxSize = 16UL * 1024 * 1024;
@@ -68,13 +70,14 @@ namespace Ryujinx.HLE.SmashAi
                 _cachedPid = process.Pid;
             }
 
-            if (_cachedAddress != 0 && TryReadAt(process, _cachedAddress, destination, out bytesWritten))
+            if (_cachedAddress != 0 &&
+                TryReadStable(process, _cachedAddress, destination, out bytesWritten))
             {
                 return true;
             }
 
             if (TryGetRegisteredAddress(process.Pid, out ulong registeredAddress) &&
-                TryReadAt(process, registeredAddress, destination, out bytesWritten))
+                TryReadStable(process, registeredAddress, destination, out bytesWritten))
             {
                 _cachedAddress = registeredAddress;
                 return true;
@@ -100,7 +103,7 @@ namespace Ryujinx.HLE.SmashAi
                 TryFindMagic(process, MemoryState.CodeMutable, ulong.MaxValue, MaxFallbackBytesPerRegionType, out address))
             {
                 _cachedAddress = address;
-                return TryReadAt(process, address, destination, out bytesWritten);
+                return TryReadStable(process, address, destination, out bytesWritten);
             }
 
             return false;
@@ -326,6 +329,26 @@ namespace Ryujinx.HLE.SmashAi
             {
                 ArrayPool<byte>.Shared.Return(rented);
             }
+        }
+
+        private static bool TryReadStable(KProcess process, ulong address, Span<byte> destination, out int bytesWritten)
+        {
+            // While an exact step is running, Python may request an observation
+            // during the exporter's very short seqlock write window. That is a
+            // transient read collision, not evidence that the NRO disappeared.
+            // Retry a few times before treating the address as unavailable.
+            for (int attempt = 0; attempt < StableReadAttempts; attempt++)
+            {
+                if (TryReadAt(process, address, destination, out bytesWritten))
+                {
+                    return true;
+                }
+
+                Thread.SpinWait(64 << attempt);
+            }
+
+            bytesWritten = 0;
+            return false;
         }
 
         private static bool TryReadAt(KProcess process, ulong address, Span<byte> destination, out int bytesWritten)
