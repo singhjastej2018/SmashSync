@@ -35,7 +35,7 @@ jobs:
 
       - name: Syntax-check Smash AI Python tools
         working-directory: tools/SmashAI
-        run: python -m py_compile smash_ai_env.py smash_ai_policy.py smash_ai_train.py smash_ai_train_multi.py smash_ai_play.py smash_ai_workers.py smash_ai_launcher.py
+        run: python -m py_compile smash_ai_env.py smash_ai_policy.py smash_ai_train.py smash_ai_train_multi.py smash_ai_eval.py smash_ai_play.py smash_ai_workers.py smash_ai_launcher.py
 
       - name: Publish Windows x64
         shell: pwsh
@@ -50,6 +50,7 @@ jobs:
           Copy-Item tools/SmashAI/smash_ai_policy.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_train.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_train_multi.py publish/SmashAI-tools/
+          Copy-Item tools/SmashAI/smash_ai_eval.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_play.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_workers.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_launcher.py publish/SmashAI-tools/
