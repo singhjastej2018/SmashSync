@@ -52,6 +52,7 @@ jobs:
           Copy-Item tools/SmashAI/Launch-SmashAI.bat publish/Launch-SmashAI.bat
           Copy-Item tools/SmashAI/SmashAI.bat publish/SmashAI.bat
           Copy-Item tools/SmashAI/Install-SmashAI-ML.bat publish/Install-SmashAI-ML.bat
+          Copy-Item "tools/SmashAI/RUN INSTRUCTIONS.txt" "publish/RUN INSTRUCTIONS.txt"
 
       - name: Package
         shell: pwsh
