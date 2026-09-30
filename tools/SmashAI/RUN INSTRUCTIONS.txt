@@ -49,16 +49,19 @@ During training, the Output box reports:
 - checkpoint saves.
 
 Training uses exact SSBU frame stepping, automatic Training Mode resets,
-unbounded host pacing, and muted audio. The game can therefore simulate faster
-than real time while preserving exact virtual frame boundaries.
+unbounded host pacing, muted audio, and host-presentation suppression. Hidden
+workers still execute SSBU/GPU work required by the game, but they skip the
+final copy/present to the visible Ryujinx window. The game can therefore
+simulate faster than real time while preserving exact virtual frame boundaries.
 
 The UI reports sim_fps and speed. A speed of 4.0x means four seconds of SSBU
 virtual gameplay are being simulated per one second of wall-clock time. With
 multiple workers, aggregate_speed is the combined throughput across all workers.
 
 Use Show Random Worker if you want to view one launched training instance.
-Showing it does not intentionally disable accelerated mode. Use Hide Worker
-Windows to hide the training windows again.
+That worker's host presentation is temporarily re-enabled, but its unbounded
+accelerated pacing remains active. Use Hide Worker Windows to suppress
+presentation and hide all training windows again.
 
 HOW TO TELL IF IT IS LEARNING / TRAINED
 ---------------------------------------
