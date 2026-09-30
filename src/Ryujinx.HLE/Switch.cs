@@ -67,6 +67,11 @@ namespace Ryujinx.HLE
 
         public bool IsFrameAvailable => Gpu.Window.IsFrameAvailable;
 
+        // SmashAI training can suppress only the final host-window presentation
+        // while keeping guest GPU command execution and SurfaceFlinger buffer
+        // lifecycle active.
+        public volatile bool SmashAiSuppressPresentation;
+
         public DirtyHacks DirtyHacks { get; }
 
         public Switch(HleConfiguration configuration)
@@ -194,6 +199,7 @@ namespace Ryujinx.HLE
         public bool WaitFifo() => Gpu.GPFifo.WaitForCommands();
         public bool ConsumeFrameAvailable() => Gpu.Window.ConsumeFrameAvailable();
         public void PresentFrame(Action swapBuffersCallback) => Gpu.Window.Present(swapBuffersCallback);
+        public void DiscardPresentFrame() => Gpu.Window.DiscardPresent();
         public void DisposeGpu() => Gpu.Dispose();
 
         public void Dispose()
