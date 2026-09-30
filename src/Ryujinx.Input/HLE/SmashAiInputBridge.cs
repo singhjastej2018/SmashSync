@@ -296,6 +296,8 @@ namespace Ryujinx.Input.HLE
                     // frame semantics, so this changes wall-clock speed only.
                     _device.VSyncMode = Ryujinx.Common.Configuration.VSyncMode.Unbounded;
                     _device.UpdateVSyncInterval();
+                    _device.Gpu.Renderer.Window?.ChangeVSyncMode(
+                        Ryujinx.Common.Configuration.VSyncMode.Unbounded);
                     _device.SetVolume(0f);
                     _fastModeEnabled = true;
 
@@ -326,6 +328,7 @@ namespace Ryujinx.Input.HLE
 
             _device.VSyncMode = _savedVSyncMode;
             _device.UpdateVSyncInterval();
+            _device.Gpu.Renderer.Window?.ChangeVSyncMode(_savedVSyncMode);
             _device.SetVolume(_savedVolume);
             _fastModeEnabled = false;
 
