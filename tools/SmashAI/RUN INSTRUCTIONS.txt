@@ -60,6 +60,28 @@ Use Show Random Worker if you want to view one launched training instance.
 Showing it does not intentionally disable accelerated mode. Use Hide Worker
 Windows to hide the training windows again.
 
+HOW TO TELL IF IT IS LEARNING / TRAINED
+---------------------------------------
+Training is not a binary on/off state. Do not judge it from policy loss alone.
+
+During training, watch:
+- sim_fps / speed: throughput, not skill,
+- mean_return_50: recent reward trend,
+- win50: recent decisive win rate against the current training opponent mix.
+
+For a cleaner skill check, stop training and click Evaluate model.pt (20) in
+the Train tab. Enter Training Mode with a CPU/stage you want to use as a fixed
+benchmark. Evaluation uses deterministic actions for 20 episodes and prints:
+- wins,
+- losses,
+- draws/timeouts,
+- decisive win rate,
+- mean return.
+
+For meaningful comparison over time, reuse the same benchmark CPU character,
+CPU level, stage, and episode frame limit. Also test held-out opponents/stages
+that were not used heavily for training.
+
 MODEL FILES
 -----------
 latest.pt
