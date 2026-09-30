@@ -110,6 +110,7 @@ def train(args) -> int:
             observation, _ = future.result()
             observations[index] = observation
             bridges[index].set_fast_mode(True)
+            bridges[index].set_presentation_enabled(False)
             print(
                 f"worker {index + 1}: match ready fighter_kind="
                 f"{observation.fighters[args.fighter_slot].fighter_kind} "
@@ -549,6 +550,11 @@ def train(args) -> int:
         return 0
 
     finally:
+        for bridge in bridges:
+            try:
+                bridge.set_presentation_enabled(True)
+            except Exception:
+                pass
         for bridge in bridges:
             try:
                 bridge.set_fast_mode(False)
