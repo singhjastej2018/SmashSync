@@ -24,6 +24,15 @@ jobs:
         with:
           global-json-file: global.json
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Test Smash AI Python environment
+        working-directory: tools/SmashAI
+        run: python -m unittest -v test_smash_ai_env.py
+
       - name: Publish Windows x64
         shell: pwsh
         run: dotnet publish src/Ryujinx/Ryujinx.csproj -c Release -r win-x64 --self-contained true -o publish -p:Version=1.0.0-smash-ai
@@ -33,6 +42,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force publish/SmashAI-tools | Out-Null
           Copy-Item tools/SmashAI/test_bridge.py publish/SmashAI-tools/
+          Copy-Item tools/SmashAI/smash_ai_env.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/Launch-SmashAI.bat publish/SmashAI-tools/
           Copy-Item docs/SmashAI.md publish/SmashAI-tools/README.md
           Copy-Item tools/SmashAI/Launch-SmashAI.bat publish/Launch-SmashAI.bat
