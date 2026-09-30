@@ -1,0 +1,122 @@
+SMASHSYNC / SMASH AI - RUN INSTRUCTIONS
+=======================================
+
+NORMAL USE
+----------
+Use SmashAI.bat for normal use.
+
+Launch-SmashAI.bat is only the old/manual launcher for troubleshooting, bridge
+tests, or development. You normally do not need it anymore.
+
+FIRST-TIME SETUP
+----------------
+1. Put your working portable folder beside Ryujinx.exe.
+2. Run Install-SmashAI-NRO.bat once.
+3. Run Install-SmashAI-ML.bat once.
+4. Run SmashAI.bat.
+5. In Setup / Status, click Check ML Device.
+   AMD/Intel systems should normally report DirectML.
+
+TRAIN AN AI
+-----------
+1. Run SmashAI.bat.
+2. Open the Train tab.
+3. Choose a model folder.
+4. Leave Resume checkpoint blank unless you want a specific checkpoint.
+   If latest.pt already exists in that model folder, training auto-resumes.
+5. Click Start / Resume Training.
+6. Ryujinx opens if needed.
+7. In SSBU:
+   - enter Training Mode,
+   - choose the character being trained as P1,
+   - choose an active CPU opponent,
+   - choose a stage,
+   - enter the match.
+8. Training attaches automatically.
+
+During training, the Output box reports:
+- episode number and outcome,
+- PPO update number,
+- environment steps,
+- simulated frames per second,
+- speed relative to normal 60 Hz,
+- rolling recent win rate,
+- recent mean reward,
+- policy/value losses,
+- checkpoint saves.
+
+Training uses exact SSBU frame stepping, automatic Training Mode resets,
+unbounded host pacing, and muted audio. The game can therefore simulate faster
+than real time while preserving exact virtual frame boundaries.
+
+MODEL FILES
+-----------
+latest.pt
+  Full checkpoint including optimizer state. Use this to resume training.
+
+model.pt
+  Smaller shareable policy weights. This is the normal file to send to another
+  SmashSync user for Play with AI.
+
+snapshot_XXXXXX.pt
+  Older policy snapshots. These are also useful for evaluation and future
+  self-play.
+
+model.json
+  Metadata and latest training counters.
+
+PLAY AGAINST A TRAINED AI
+-------------------------
+1. Run SmashAI.bat.
+2. Open Play with AI.
+3. Select model.pt.
+4. Choose whether the AI controls P1, P2, or P3.
+5. Click Start Play with AI.
+6. Navigate SSBU normally and select characters/stage normally.
+7. Start the match.
+
+The AI does not take over during menus. It takes over the selected player only
+after an actual match begins, and releases control again when the match ends.
+
+For P2/P3, keep that Ryujinx controller slot configured so the player can join
+character select. You can use the keyboard/controller to select the AI's
+character, then the model takes over once the match starts.
+
+SHARING WITH A FRIEND
+---------------------
+For the current build, the easiest package is:
+- the complete SmashSync/Ryujinx folder,
+- its working portable folder,
+- the desired model.pt.
+
+Your friend still needs Python plus the ML dependencies installed by
+Install-SmashAI-ML.bat. A later ONNX/integrated inference build is planned so
+Play with AI will not need Python or PyTorch.
+
+CHARACTERS, STAGES, AND PLAYER SLOTS
+------------------------------------
+P1/P2/P3 do not need separate neural-network experts. The policy state encoder
+is self-relative, so the same model can control any supported player slot.
+
+Character expertise is different. A model trained mostly on one fighter should
+currently be treated as an expert for that fighter. It may run on another
+fighter, but quality is not guaranteed. Multi-character training is planned.
+
+Stage generalization also depends on training diversity. A model trained on one
+stage can overfit to that layout. Multi-stage worker training and richer stage
+geometry features are planned.
+
+TROUBLESHOOTING
+---------------
+If SmashAI.bat reports the bridge is offline:
+- make sure Ryujinx was launched through the SmashAI UI or Launch-SmashAI.bat,
+- make sure the bridge port is 24872 unless intentionally changed.
+
+If exporter state is unavailable:
+- enter an SSBU match,
+- verify libsmash_ai_state.nro is installed,
+- do not install Smashline for this build.
+
+If exact stepping gets stuck:
+- stop the trainer. The host watchdog releases the frame gate after trainer
+  silence, and the UI also clears controller overrides when stopped.
