@@ -311,7 +311,14 @@ namespace Ryujinx.Headless
 
                     while (Device.ConsumeFrameAvailable())
                     {
-                        Device.PresentFrame(SwapBuffers);
+                        if (Device.SmashAiSuppressPresentation)
+                        {
+                            Device.DiscardPresentFrame();
+                        }
+                        else
+                        {
+                            Device.PresentFrame(SwapBuffers);
+                        }
                     }
 
                     if (_ticks >= _ticksPerFrame)
