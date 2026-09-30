@@ -769,6 +769,10 @@ class SmashAiLauncher(tk.Tk):
                     except ProtocolError:
                         pass
                     try:
+                        bridge.set_presentation_enabled(True)
+                    except ProtocolError:
+                        pass
+                    try:
                         bridge.set_fast_mode(False)
                     except ProtocolError:
                         pass
@@ -807,9 +811,23 @@ class SmashAiLauncher(tk.Tk):
         if self.monitored_port is not None:
             previous = self.ryujinx_processes.get(self.monitored_port)
             if previous is not None and previous.poll() is None:
+                try:
+                    with BridgeClient(
+                        port=self.monitored_port, timeout=0.25, retries=1
+                    ) as bridge:
+                        bridge.set_presentation_enabled(False)
+                except Exception:
+                    pass
                 set_process_windows_visible(previous.pid, False)
 
         port, process = random.choice(live)
+        try:
+            with BridgeClient(port=port, timeout=0.25, retries=1) as bridge:
+                bridge.set_presentation_enabled(True)
+        except Exception as exc:
+            self.log_queue.put(
+                f"worker UDP {port}: could not enable presentation ({exc})"
+            )
         set_process_windows_visible(process.pid, True)
         self.monitored_port = port
         self.log_queue.put(
@@ -817,15 +835,22 @@ class SmashAiLauncher(tk.Tk):
         )
 
     def _hide_all_worker_windows(self) -> None:
-        count = 0
-        for process in self.ryujinx_processes.values():
+        hidden_processes = 0
+        for port, process in self.ryujinx_processes.items():
             if process.poll() is None:
-                count += set_process_windows_visible(
-                    process.pid, False
-                )
+                try:
+                    with BridgeClient(
+                        port=port, timeout=0.25, retries=1
+                    ) as bridge:
+                        bridge.set_presentation_enabled(False)
+                except Exception:
+                    pass
+                set_process_windows_visible(process.pid, False)
+                hidden_processes += 1
         self.monitored_port = None
         self.log_queue.put(
-            f"Requested hide for {len(self.ryujinx_processes)} launched worker process(es)."
+            f"Hidden {hidden_processes} launched training worker(s); "
+            "host presentation suppressed."
         )
 
     def _close_launched_ryujinx(self) -> None:
