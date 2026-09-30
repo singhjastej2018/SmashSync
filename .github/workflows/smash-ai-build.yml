@@ -31,7 +31,7 @@ jobs:
 
       - name: Test Smash AI Python environment
         working-directory: tools/SmashAI
-        run: python -m unittest -v test_smash_ai_env.py
+        run: python -m unittest -v test_smash_ai_env.py test_smash_ai_policy.py
 
       - name: Publish Windows x64
         shell: pwsh
@@ -43,9 +43,15 @@ jobs:
           New-Item -ItemType Directory -Force publish/SmashAI-tools | Out-Null
           Copy-Item tools/SmashAI/test_bridge.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_env.py publish/SmashAI-tools/
+          Copy-Item tools/SmashAI/smash_ai_policy.py publish/SmashAI-tools/
+          Copy-Item tools/SmashAI/smash_ai_train.py publish/SmashAI-tools/
+          Copy-Item tools/SmashAI/smash_ai_play.py publish/SmashAI-tools/
+          Copy-Item tools/SmashAI/smash_ai_launcher.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/Launch-SmashAI.bat publish/SmashAI-tools/
           Copy-Item docs/SmashAI.md publish/SmashAI-tools/README.md
           Copy-Item tools/SmashAI/Launch-SmashAI.bat publish/Launch-SmashAI.bat
+          Copy-Item tools/SmashAI/SmashAI.bat publish/SmashAI.bat
+          Copy-Item tools/SmashAI/Install-SmashAI-ML.bat publish/Install-SmashAI-ML.bat
 
       - name: Package
         shell: pwsh
