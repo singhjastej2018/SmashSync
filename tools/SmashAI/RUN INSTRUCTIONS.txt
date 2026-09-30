@@ -22,17 +22,20 @@ TRAIN AN AI
 1. Run SmashAI.bat.
 2. Open the Train tab.
 3. Choose a model folder.
-4. Leave Resume checkpoint blank unless you want a specific checkpoint.
+4. Choose Parallel Ryujinx workers. Start with 1 for a basic test, then try 2-3.
+   Move toward 5 only if the reported aggregate simulated FPS keeps increasing.
+5. Leave Resume checkpoint blank unless you want a specific checkpoint.
    If latest.pt already exists in that model folder, training auto-resumes.
-5. Click Start / Resume Training.
-6. Ryujinx opens if needed.
-7. In SSBU:
+6. Click Start / Resume Training.
+7. Ryujinx worker windows open. For every visible worker:
    - enter Training Mode,
-   - choose the character being trained as P1,
+   - choose the SAME character being trained as P1,
    - choose an active CPU opponent,
    - choose a stage,
    - enter the match.
-8. Training attaches automatically.
+   CPU character/level and stage may differ between workers.
+8. Each ready worker can auto-hide after entering the match.
+9. One central PPO learner combines all worker rollouts into the same model.
 
 During training, the Output box reports:
 - episode number and outcome,
@@ -48,6 +51,14 @@ During training, the Output box reports:
 Training uses exact SSBU frame stepping, automatic Training Mode resets,
 unbounded host pacing, and muted audio. The game can therefore simulate faster
 than real time while preserving exact virtual frame boundaries.
+
+The UI reports sim_fps and speed. A speed of 4.0x means four seconds of SSBU
+virtual gameplay are being simulated per one second of wall-clock time. With
+multiple workers, aggregate_speed is the combined throughput across all workers.
+
+Use Show Random Worker if you want to view one launched training instance.
+Showing it does not intentionally disable accelerated mode. Use Hide Worker
+Windows to hide the training windows again.
 
 MODEL FILES
 -----------
@@ -95,16 +106,22 @@ Play with AI will not need Python or PyTorch.
 
 CHARACTERS, STAGES, AND PLAYER SLOTS
 ------------------------------------
-P1/P2/P3 do not need separate neural-network experts. The policy state encoder
+P1/P2/P3 do NOT need separate neural-network experts. The policy state encoder
 is self-relative, so the same model can control any supported player slot.
 
-Character expertise is different. A model trained mostly on one fighter should
-currently be treated as an expert for that fighter. It may run on another
-fighter, but quality is not guaranteed. Multi-character training is planned.
+Character expertise is different. For the current training system, treat one
+model folder as one fighter expert. All parallel workers for that model must use
+the same P1 fighter. It may run on another fighter, but quality is not
+guaranteed. A later universal policy can train across fighter IDs.
 
-Stage generalization also depends on training diversity. A model trained on one
-stage can overfit to that layout. Multi-stage worker training and richer stage
-geometry features are planned.
+Stage generalization depends on training diversity. A practical current setup
+is to put the same trainee on several workers but use different legal stages
+and different CPU opponents/levels. This teaches one fighter expert across a
+broader distribution. Richer explicit stage-geometry features are planned.
+
+CPU opponents are only the first curriculum. Saved snapshot opponents and
+self-play are planned so the AI does not merely specialize against Nintendo's
+CPU behavior.
 
 TROUBLESHOOTING
 ---------------
