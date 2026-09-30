@@ -42,6 +42,7 @@ class SmashAiLauncher(tk.Tk):
         self.worker: subprocess.Popen | None = None
         self.worker_kind: str | None = None
         self.log_queue: queue.Queue[str] = queue.Queue()
+        self.ui_queue: queue.Queue[object] = queue.Queue()
 
         # Ryujinx processes launched by this UI, keyed by bridge port.
         self.ryujinx_processes: dict[int, subprocess.Popen] = {}
@@ -367,6 +368,13 @@ class SmashAiLauncher(tk.Tk):
         except queue.Empty:
             pass
 
+        try:
+            while True:
+                callback = self.ui_queue.get_nowait()
+                callback()
+        except queue.Empty:
+            pass
+
         if self.worker is not None and self.worker.poll() is not None:
             code = self.worker.returncode
             kind = self.worker_kind or "worker"
@@ -455,10 +463,10 @@ class SmashAiLauncher(tk.Tk):
             return
 
         ports = self._ports_for_workers(count)
+        auto_hide = bool(self.auto_hide_workers_var.get())
 
         def task() -> None:
             try:
-                self.status_var.set if False else None
                 roots = prepare_worker_roots(
                     ROOT_DIR,
                     count,
@@ -486,23 +494,23 @@ class SmashAiLauncher(tk.Tk):
                         f"worker {index}: launched PID {process.pid} on UDP {port}"
                     )
 
-                    if self.auto_hide_workers_var.get():
+                    if auto_hide:
                         threading.Thread(
                             target=self._auto_hide_worker_when_ready,
                             args=(index, port, process),
                             daemon=True,
                         ).start()
 
-                self.after(0, on_ready)
+                self.ui_queue.put(on_ready)
             except Exception as exc:
                 self.log_queue.put(f"worker preparation failed: {exc}")
-                self.after(
-                    0,
-                    lambda: messagebox.showerror(
-                        "Parallel worker setup failed", str(exc)
-                    ),
+                error_text = str(exc)
+                self.ui_queue.put(
+                    lambda error_text=error_text: messagebox.showerror(
+                        "Parallel worker setup failed", error_text
+                    )
                 )
-                self.after(0, lambda: self.status_var.set("Ready"))
+                self.ui_queue.put(lambda: self.status_var.set("Ready"))
 
         self.status_var.set(f"Preparing {count} Ryujinx worker(s)...")
         self.parallel_prepare_thread = threading.Thread(
@@ -525,7 +533,6 @@ class SmashAiLauncher(tk.Tk):
         )
         if (
             observation is not None
-            and self.auto_hide_workers_var.get()
             and not self.closing
         ):
             set_process_windows_visible(process.pid, False)
