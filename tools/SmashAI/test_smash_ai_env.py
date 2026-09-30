@@ -160,6 +160,11 @@ class SmashAiEnvTests(unittest.TestCase):
         self.assertEqual(packet, b"SAI1" + bytes([7, 1]))
         self.assertEqual(module.MSG_FAST_MODE_RESPONSE, 0x87)
 
+    def test_presentation_packet_layout(self):
+        packet = module.BRIDGE_MAGIC + bytes([module.MSG_PRESENTATION, 0])
+        self.assertEqual(packet, b"SAI1" + bytes([8, 0]))
+        self.assertEqual(module.MSG_PRESENTATION_RESPONSE, 0x88)
+
     def test_step_packet_layout(self):
         packet = module.BRIDGE_MAGIC + bytes([module.MSG_STEP_FRAMES]) + struct.pack("<I", 3)
         self.assertEqual(len(packet), 9)
