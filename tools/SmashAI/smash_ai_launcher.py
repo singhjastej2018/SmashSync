@@ -198,6 +198,7 @@ class SmashAiLauncher(tk.Tk):
         ttk.Button(buttons, text="Launch Ryujinx", command=self._launch_ryujinx).pack(side="left")
         ttk.Button(buttons, text="Check Bridge / Exporter", command=self._check_bridge).pack(side="left", padx=8)
         ttk.Button(buttons, text="Install ML Dependencies", command=self._install_dependencies).pack(side="left")
+        ttk.Button(buttons, text="Check ML Device", command=self._check_ml_device).pack(side="left", padx=8)
 
         ttk.Label(
             parent,
@@ -411,6 +412,29 @@ class SmashAiLauncher(tk.Tk):
                     self.log_queue.put(f"exporter: bridge online, observation not ready ({exc})")
         except Exception as exc:
             self.log_queue.put(f"bridge check failed: {exc}")
+
+    def _check_ml_device(self) -> None:
+        command = [
+            sys.executable,
+            str(TRAIN_SCRIPT),
+            "--model-dir",
+            str(DEFAULT_MODELS_DIR / "_device_check"),
+            "--device",
+            self.device_var.get(),
+            "--device-check",
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(ROOT_DIR),
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            output = (result.stdout + result.stderr).strip()
+            self.log_queue.put(output or f"ML device check exited with code {result.returncode}")
+        except Exception as exc:
+            self.log_queue.put(f"ML device check failed: {exc}")
 
     def _install_dependencies(self) -> None:
         if not INSTALL_ML_BAT.exists():
