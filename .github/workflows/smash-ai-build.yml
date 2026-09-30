@@ -33,6 +33,10 @@ jobs:
         working-directory: tools/SmashAI
         run: python -m unittest -v test_smash_ai_env.py test_smash_ai_policy.py
 
+      - name: Syntax-check Smash AI Python tools
+        working-directory: tools/SmashAI
+        run: python -m py_compile smash_ai_env.py smash_ai_policy.py smash_ai_train.py smash_ai_train_multi.py smash_ai_play.py smash_ai_workers.py smash_ai_launcher.py
+
       - name: Publish Windows x64
         shell: pwsh
         run: dotnet publish src/Ryujinx/Ryujinx.csproj -c Release -r win-x64 --self-contained true -o publish -p:Version=1.0.0-smash-ai
@@ -45,7 +49,9 @@ jobs:
           Copy-Item tools/SmashAI/smash_ai_env.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_policy.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_train.py publish/SmashAI-tools/
+          Copy-Item tools/SmashAI/smash_ai_train_multi.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_play.py publish/SmashAI-tools/
+          Copy-Item tools/SmashAI/smash_ai_workers.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/smash_ai_launcher.py publish/SmashAI-tools/
           Copy-Item tools/SmashAI/Launch-SmashAI.bat publish/SmashAI-tools/
           Copy-Item docs/SmashAI.md publish/SmashAI-tools/README.md
