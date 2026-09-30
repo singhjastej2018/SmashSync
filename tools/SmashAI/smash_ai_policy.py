@@ -273,6 +273,19 @@ def validate_checkpoint_metadata(metadata: Dict[str, Any]) -> None:
         raise RuntimeError("checkpoint action size does not match this runtime")
 
 
+def _portable_cpu_copy(value):
+    torch = import_torch()
+    if torch.is_tensor(value):
+        return value.detach().cpu()
+    if isinstance(value, dict):
+        return {key: _portable_cpu_copy(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_portable_cpu_copy(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_portable_cpu_copy(item) for item in value)
+    return value
+
+
 def save_checkpoint(
     path: str | Path,
     *,
@@ -286,8 +299,12 @@ def save_checkpoint(
     torch = import_torch()
     payload = {
         "metadata": dict(metadata),
-        "model_state": model.state_dict(),
-        "optimizer_state": None if optimizer is None else optimizer.state_dict(),
+        "model_state": _portable_cpu_copy(model.state_dict()),
+        "optimizer_state": (
+            None
+            if optimizer is None
+            else _portable_cpu_copy(optimizer.state_dict())
+        ),
         "update": int(update),
         "environment_steps": int(environment_steps),
         "extra": {} if extra is None else dict(extra),
