@@ -140,6 +140,7 @@ def train(args) -> int:
 
     try:
         observation, reset_info = env.reset(timeout=args.wait_match)
+        bridge.set_fast_mode(True)
         fighter_kind = observation.fighters[args.fighter_slot].fighter_kind
         print(
             f"training match detected: fighter_kind={fighter_kind} "
@@ -189,6 +190,8 @@ def train(args) -> int:
         episode_steps = 0
         episode_count = 0
         recent_returns: List[float] = []
+        recent_outcomes: List[int] = []
+        simulated_frames = 0
         started = time.monotonic()
 
         while args.updates <= 0 or update < args.updates:
@@ -225,6 +228,7 @@ def train(args) -> int:
                 value_buffer.append(float(value.item()))
 
                 environment_steps += 1
+                simulated_frames += int(info.get("advanced_frames", args.action_repeat))
                 episode_steps += 1
                 episode_reward += reward
 
@@ -232,9 +236,28 @@ def train(args) -> int:
                     episode_count += 1
                     recent_returns.append(episode_reward)
                     recent_returns = recent_returns[-50:]
+
+                    controlled_dead = next_observation.fighter_dead(args.fighter_slot)
+                    opponent_dead = any(
+                        slot != args.fighter_slot
+                        and fighter.present
+                        and next_observation.fighter_dead(slot)
+                        for slot, fighter in enumerate(next_observation.fighters)
+                    )
+                    outcome = 0
+                    if terminated:
+                        if opponent_dead and not controlled_dead:
+                            outcome = 1
+                        elif controlled_dead and not opponent_dead:
+                            outcome = -1
+                    recent_outcomes.append(outcome)
+                    recent_outcomes = recent_outcomes[-50:]
+
+                    outcome_name = "win" if outcome > 0 else "loss" if outcome < 0 else "draw/timeout"
                     print(
-                        f"episode={episode_count} return={episode_reward:+.3f} "
-                        f"steps={episode_steps} virtual_frames={info['episode_frames']} "
+                        f"episode={episode_count} outcome={outcome_name} "
+                        f"return={episode_reward:+.3f} steps={episode_steps} "
+                        f"virtual_frames={info['episode_frames']} "
                         f"terminated={terminated} truncated={truncated}",
                         flush=True,
                     )
@@ -330,15 +353,26 @@ def train(args) -> int:
             update += 1
             elapsed = max(0.001, time.monotonic() - started)
             steps_per_second = environment_steps / elapsed
+            simulated_fps = simulated_frames / elapsed
+            realtime_multiple = simulated_fps / 60.0
             mean_return = (
                 sum(recent_returns) / len(recent_returns)
                 if recent_returns
                 else 0.0
             )
 
+            decisive = [value for value in recent_outcomes if value != 0]
+            win_rate = (
+                sum(1 for value in decisive if value > 0) / len(decisive)
+                if decisive
+                else 0.0
+            )
+
             print(
                 f"update={update} env_steps={environment_steps} "
-                f"steps_s={steps_per_second:.1f} "
+                f"steps_s={steps_per_second:.1f} sim_fps={simulated_fps:.1f} "
+                f"speed={realtime_multiple:.2f}x "
+                f"win50={win_rate * 100.0:.1f}% "
                 f"mean_return_50={mean_return:+.3f} "
                 f"policy_loss={sum(policy_losses)/max(1,len(policy_losses)):+.4f} "
                 f"value_loss={sum(value_losses)/max(1,len(value_losses)):.4f} "
@@ -350,6 +384,10 @@ def train(args) -> int:
                 extra = {
                     "episodes": episode_count,
                     "recent_returns": recent_returns,
+                    "recent_outcomes": recent_outcomes,
+                    "rolling_win_rate": win_rate,
+                    "simulated_fps": simulated_fps,
+                    "realtime_multiple": realtime_multiple,
                     "device_name": device_name,
                 }
                 latest = model_dir / "latest.pt"
@@ -389,6 +427,10 @@ def train(args) -> int:
         return 0
 
     finally:
+        try:
+            bridge.set_fast_mode(False)
+        except Exception:
+            pass
         try:
             keepalive_stop.set()
             keepalive_thread.join(timeout=2.0)
