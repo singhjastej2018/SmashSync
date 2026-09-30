@@ -120,12 +120,16 @@ character, then the model takes over once the match starts.
 
 SHARING WITH A FRIEND
 ---------------------
-For the current build, the easiest package is:
-- the complete SmashSync/Ryujinx folder,
-- its working portable folder,
-- the desired model.pt.
+Send:
+- the SmashSync/Ryujinx build,
+- the desired model.pt,
+- RUN INSTRUCTIONS.txt.
 
-Your friend still needs Python plus the ML dependencies installed by
+Do not distribute game files, console keys, or firmware from your portable
+folder. Your friend should use their own legally obtained SSBU installation,
+keys, firmware, and configuration, then install the bundled SmashAI NRO.
+
+Your friend currently needs Python plus the ML dependencies installed by
 Install-SmashAI-ML.bat. A later ONNX/integrated inference build is planned so
 Play with AI will not need Python or PyTorch.
 
