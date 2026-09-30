@@ -518,16 +518,30 @@ class SmashAiEnv:
         if previous.in_match and not current.in_match:
             return True
 
+        previous_fighter = previous.fighters[self.controlled_slot]
         fighter = current.fighters[self.controlled_slot]
-        if previous.in_match and (not fighter.present or fighter.stocks <= 0):
+        if previous.in_match and not fighter.present:
+            return True
+        if previous.in_match and previous_fighter.stocks > 0 and fighter.stocks <= 0:
             return True
 
-        present_opponents = [
-            f
-            for index, f in enumerate(current.fighters)
-            if index != self.controlled_slot and f.present
+        opponent_pairs = [
+            (previous.fighters[index], current.fighters[index])
+            for index in range(MAX_FIGHTERS)
+            if index != self.controlled_slot
+            and previous.fighters[index].present
+            and current.fighters[index].present
         ]
-        if previous.in_match and present_opponents and all(f.stocks <= 0 for f in present_opponents):
+        stock_tracked_opponents = [
+            current_fighter
+            for previous_fighter, current_fighter in opponent_pairs
+            if previous_fighter.stocks > 0
+        ]
+        if (
+            previous.in_match
+            and stock_tracked_opponents
+            and all(f.stocks <= 0 for f in stock_tracked_opponents)
+        ):
             return True
 
         return False
