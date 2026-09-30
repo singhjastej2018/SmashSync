@@ -28,6 +28,7 @@ RYUJINX_EXE = ROOT_DIR / "Ryujinx.exe"
 TRAIN_SCRIPT = TOOLS_DIR / "smash_ai_train.py"
 TRAIN_MULTI_SCRIPT = TOOLS_DIR / "smash_ai_train_multi.py"
 PLAY_SCRIPT = TOOLS_DIR / "smash_ai_play.py"
+EVAL_SCRIPT = TOOLS_DIR / "smash_ai_eval.py"
 INSTALL_ML_BAT = ROOT_DIR / "Install-SmashAI-ML.bat"
 DEFAULT_MODELS_DIR = ROOT_DIR / "SmashAI-models"
 
@@ -220,9 +221,14 @@ class SmashAiLauncher(tk.Tk):
         ).pack(side="left", padx=8)
         ttk.Button(
             button_frame,
+            text="Evaluate model.pt (20)",
+            command=self._start_evaluation,
+        ).pack(side="left")
+        ttk.Button(
+            button_frame,
             text="Open Model Folder",
             command=self._open_model_folder,
-        ).pack(side="left")
+        ).pack(side="left", padx=(8, 0))
 
         ttk.Label(
             parent,
@@ -656,6 +662,53 @@ class SmashAiLauncher(tk.Tk):
             )
 
         self._prepare_and_launch_workers(count, start_trainer)
+
+    def _start_evaluation(self) -> None:
+        model = Path(self.model_dir_var.get()) / "model.pt"
+        if not model.exists():
+            messagebox.showerror(
+                "Model missing",
+                f"Train/save a model first. Could not find:\n{model}",
+            )
+            return
+
+        try:
+            port = self._parse_port()
+        except Exception as exc:
+            messagebox.showerror("Invalid port", str(exc))
+            return
+
+        if self.worker is not None and self.worker.poll() is None:
+            messagebox.showwarning(
+                "Already running",
+                "Stop the current training/play process before evaluation.",
+            )
+            return
+
+        self._launch_ryujinx()
+        command = [
+            sys.executable,
+            str(EVAL_SCRIPT),
+            "--model",
+            str(model),
+            "--episodes",
+            "20",
+            "--port",
+            str(port),
+            "--device",
+            self.device_var.get(),
+            "--player",
+            "0",
+            "--fighter-slot",
+            "0",
+            "--max-episode-frames",
+            self.episode_frames_var.get(),
+        ]
+        self.log_queue.put(
+            "Evaluation started. Enter Training Mode with the benchmark CPU/stage. "
+            "This runs 20 deterministic episodes and reports wins/losses/draws."
+        )
+        self._start_process(command, "Evaluation")
 
     def _start_play(self) -> None:
         model = Path(self.play_model_var.get().strip())
