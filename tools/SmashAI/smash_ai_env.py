@@ -495,6 +495,8 @@ class SmashAiEnv:
                         self.reward_config,
                     )
                     terminated = self._is_terminated(previous, current)
+                    if terminated:
+                        self.bridge.set_action(self.player, ControllerAction())
                     self.last_observation = current
                     return current, reward, terminated, False, {
                         "requested_frames": self.action_repeat,
