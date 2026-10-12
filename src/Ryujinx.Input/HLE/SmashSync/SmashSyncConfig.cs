@@ -33,10 +33,10 @@ namespace Ryujinx.Input.HLE.SmashSync
         public bool ConfigureTwoPlayers { get; set; } = true;
         public bool RequireReadyChord { get; set; } = true;
 
-        // Experimental phase-locked pacing. This does not replace the strict
-        // per-tick input barrier; it continuously trims small host pacing errors
-        // so that the barrier is reached less often.
-        public bool EnableAdaptiveClockSync { get; set; } = true;
+        // Reserved for a future pacing controller tied to a verified guest/game
+        // simulation boundary. Peer-local clock correction is disabled because it
+        // can map the same logical input tick onto different SSBU updates.
+        public bool EnableAdaptiveClockSync { get; set; } = false;
         public int MaxClockRateAdjustmentPercent { get; set; } = 3;
 
         public SmashSyncMode ParsedMode =>
