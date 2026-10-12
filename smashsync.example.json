@@ -14,5 +14,7 @@
   "RecordFile": "smashsync-record.jsonl",
   "LogFile": "smashsync-session.log",
   "ConfigureTwoPlayers": true,
-  "RequireReadyChord": false
+  "RequireReadyChord": false,
+  "EnableAdaptiveClockSync": true,
+  "MaxClockRateAdjustmentPercent": 3
 }
