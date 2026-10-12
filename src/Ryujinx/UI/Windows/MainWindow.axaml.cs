@@ -29,6 +29,7 @@ using Ryujinx.HLE.FileSystem;
 using Ryujinx.HLE.HOS;
 using Ryujinx.HLE.HOS.Services.Account.Acc;
 using Ryujinx.Input.HLE;
+using Ryujinx.Input.HLE.SmashSync;
 using Ryujinx.Input.SDL3;
 using Ryujinx.Input;
 using System;
@@ -110,7 +111,10 @@ namespace Ryujinx.Ava.UI.Windows
             {
                 AvaloniaKeyboardDriver keyboardDriver = new(this, KeyboardInputMode.Semantic);
                 keyboardDriver.KeyPressed += PhysicalKeyLabelHelper.ObserveKeyPress;
-                InputManager = new InputManager(keyboardDriver, new SDL3GamepadDriver());
+                SmashSyncLobbyService.Initialize();
+                InputManager = new InputManager(
+                    keyboardDriver,
+                    new SmashSyncCompositeGamepadDriver(new SDL3GamepadDriver()));
 
                 _ = this.GetObservable(IsActiveProperty).Subscribe(it => ViewModel.IsActive = it);
                 this.ScalingChanged += OnScalingChanged;
@@ -219,6 +223,21 @@ namespace Ryujinx.Ava.UI.Windows
         {
             if (args.Application != null)
             {
+                if (SmashSyncLobbyService.NetplayEnabled && !SmashSyncLobbyService.IsConnected)
+                {
+                    await ContentDialogHelper.ShowTextDialog(
+                        "SmashSync",
+                        $"Connect to the configured peer ({SmashSyncLobbyService.PeerAddress}) and accept the controller handshake before launching a game.",
+                        string.Empty,
+                        string.Empty,
+                        string.Empty,
+                        "OK",
+                        (int)Symbol.Checkmark);
+
+                    args.Handled = true;
+                    return;
+                }
+
                 ViewModel.SelectedIcon = args.Application.Icon;
 
                 await ViewModel.LoadApplication(args.Application);
@@ -639,6 +658,7 @@ namespace Ryujinx.Ava.UI.Windows
 
             ApplicationLibrary.CancelLoading();
             InputManager.Dispose();
+            SmashSyncLobbyService.Shutdown();
             _appLibraryAppsSubscription?.Dispose();
             Program.Exit();
 

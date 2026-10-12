@@ -121,6 +121,15 @@ namespace Ryujinx.HLE.HOS
         {
             TickSource = new TickSource(KernelConstants.CounterFrequency);
 
+            // SmashSync freezes the guest counter at the earliest possible point.
+            // This happens before kernel/services initialization so differences in
+            // host construction speed do not become different guest-time offsets.
+            if (device.Configuration.SuspendApplicationOnStart)
+            {
+                TickSource.Suspend();
+                TickSource.Reset();
+            }
+
             KernelContext = new KernelContext(
                 TickSource,
                 device,
@@ -538,24 +547,57 @@ namespace Ryujinx.HLE.HOS
         {
             lock (KernelContext.Processes)
             {
-                foreach (KProcess process in KernelContext.Processes.Values)
-                {
-                    if (process.IsApplication)
-                    {
-                        // Only game process should be paused.
-                        process.SetActivity(pause);
-                    }
-                }
-
                 if (pause && !IsPaused)
                 {
-                    Device.AudioDeviceDriver.GetPauseEvent().Reset();
-                    TickSource.Suspend();
+                    bool committed = false;
+
+                    foreach (KProcess process in KernelContext.Processes.Values)
+                    {
+                        if (!process.IsApplication)
+                        {
+                            continue;
+                        }
+
+                        process.SetActivity(true, committed ? null : () =>
+                        {
+                            Device.AudioDeviceDriver.GetPauseEvent().Reset();
+                            TickSource.Suspend();
+                        });
+
+                        committed = true;
+                    }
+
+                    if (!committed)
+                    {
+                        Device.AudioDeviceDriver.GetPauseEvent().Reset();
+                        TickSource.Suspend();
+                    }
                 }
                 else if (!pause && IsPaused)
                 {
-                    Device.AudioDeviceDriver.GetPauseEvent().Set();
-                    TickSource.Resume();
+                    bool committed = false;
+
+                    foreach (KProcess process in KernelContext.Processes.Values)
+                    {
+                        if (!process.IsApplication)
+                        {
+                            continue;
+                        }
+
+                        process.SetActivity(false, committed ? null : () =>
+                        {
+                            TickSource.Resume();
+                            Device.AudioDeviceDriver.GetPauseEvent().Set();
+                        });
+
+                        committed = true;
+                    }
+
+                    if (!committed)
+                    {
+                        TickSource.Resume();
+                        Device.AudioDeviceDriver.GetPauseEvent().Set();
+                    }
                 }
             }
 

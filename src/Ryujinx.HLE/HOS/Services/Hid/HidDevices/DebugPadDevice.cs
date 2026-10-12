@@ -7,6 +7,11 @@ namespace Ryujinx.HLE.HOS.Services.Hid
     {
         public DebugPadDevice(Switch device, bool active) : base(device, active) { }
 
+        public void ResetSmashSyncInputHistory()
+        {
+            _device.Hid.SharedMemory.DebugPad.Clear();
+        }
+
         public void Update()
         {
             ref RingLifo<DebugPadState> lifo = ref _device.Hid.SharedMemory.DebugPad;

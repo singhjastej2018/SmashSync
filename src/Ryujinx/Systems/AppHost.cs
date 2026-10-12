@@ -40,6 +40,7 @@ using Ryujinx.HLE.HOS;
 using Ryujinx.HLE.HOS.Services.Account.Acc;
 using Ryujinx.Input;
 using Ryujinx.Input.HLE;
+using Ryujinx.Input.HLE.SmashSync;
 using SkiaSharp;
 using SPB.Graphics.Vulkan;
 using System;
@@ -725,6 +726,13 @@ namespace Ryujinx.Ava.Systems
             InitEmulatedSwitch();
             MainWindow.UpdateGraphicsConfig();
 
+            bool smashSyncStartPaused = SmashSyncLobbyService.NetplayEnabled && SmashSyncLobbyService.IsConnected;
+            if (smashSyncStartPaused)
+            {
+                Device.ArmApplicationStartPause();
+                Logger.Info?.PrintMsg(LogClass.Application, "SmashSync: application start pause armed before guest process launch");
+            }
+
             SystemVersion firmwareVersion = ContentManager.GetCurrentFirmwareVersion();
 
             if (Application.Current?.ApplicationLifetime is IClassicDesktopStyleApplicationLifetime)
@@ -924,6 +932,52 @@ namespace Ryujinx.Ava.Systems
                 throw new OperationCanceledException(cts.Token);
             }
 
+            if (smashSyncStartPaused)
+            {
+                string smashSyncTitleId = Device.Processes.ActiveApplication.ProgramIdText;
+
+                try
+                {
+                    if (SmashSyncLobbyService.LocalPlayer == 1)
+                    {
+                        byte[] authoritativeSave = Device.CreateActiveApplicationSaveArchive();
+                        await Task.Run(() => SmashSyncLobbyService.SendAuthoritativeSave(smashSyncTitleId, authoritativeSave));
+                        Logger.Info?.PrintMsg(LogClass.Application, $"SmashSync: sent P1 authoritative save for {smashSyncTitleId}");
+                    }
+                    else
+                    {
+                        byte[] authoritativeSave = await Task.Run(() =>
+                        {
+                            return SmashSyncLobbyService.WaitForAuthoritativeSave(
+                                smashSyncTitleId,
+                                0,
+                                out byte[] snapshot)
+                                ? snapshot
+                                : null;
+                        });
+
+                        if (authoritativeSave == null)
+                        {
+                            throw new TimeoutException($"Timed out waiting for P1 authoritative save for {smashSyncTitleId}.");
+                        }
+
+                        Device.ApplySmashSyncAuthoritativeSave(authoritativeSave);
+                        Logger.Info?.PrintMsg(LogClass.Application, $"SmashSync: applied temporary P1 authoritative save for {smashSyncTitleId}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.Error?.PrintMsg(LogClass.Application, $"SmashSync authoritative save synchronization failed: {ex}");
+                    SmashSyncLobbyService.Disconnect();
+                    Device.Dispose();
+                    cts.Cancel();
+                    throw new OperationCanceledException("SmashSync authoritative save synchronization failed.", ex, cts.Token);
+                }
+
+                Device.DisarmApplicationStartPause();
+                Logger.Info?.PrintMsg(LogClass.Application, "SmashSync: guest process loaded with P1 authoritative state while paused; waiting for shared epoch");
+            }
+
             ApplicationLibrary.LoadAndSaveMetaData(Device.Processes.ActiveApplication.ProgramIdText,
                 appMetadata => appMetadata.UpdatePreGame()
             );
@@ -986,8 +1040,11 @@ namespace Ryujinx.Ava.Systems
                 _ => new OpenGLRenderer()
             };
 
-            // Initialize Configuration.
-            Device = new Switch(ConfigurationState.Instance.CreateHleConfiguration()
+            // Initialize Configuration. For an accepted SmashSync session,
+            // arm the synchronized-start pause before Switch construction so the
+            // guest tick source is frozen from its earliest usable instant.
+            Ryujinx.HLE.HleConfiguration hleConfiguration = ConfigurationState.Instance.CreateHleConfiguration()
+                .ConfigureSynchronizedStartPause(SmashSyncLobbyService.NetplayEnabled && SmashSyncLobbyService.IsConnected)
                 .Configure(
                     VirtualFileSystem,
                     _viewModel.LibHacHorizonManager,
@@ -997,8 +1054,9 @@ namespace Ryujinx.Ava.Systems
                     renderer.TryMakeThreaded(ConfigurationState.Instance.Graphics.BackendThreading),
                     InitializeAudio(),
                     _viewModel.UiHandler
-                )
-            );
+                );
+
+            Device = new Switch(hleConfiguration);
         }
 
         private static IHardwareDeviceDriver InitializeAudio()
@@ -1302,12 +1360,71 @@ namespace Ryujinx.Ava.Systems
                 return false;
             }
 
+            NpadManager.PumpSmashSyncControl();
+
+            if (NpadManager.SmashSyncPauseRequested && !NpadManager.SmashSyncOwnsPause)
+            {
+                if (!Device.System.IsPaused)
+                {
+                    // SmashSync synchronization pauses are internal barriers, not
+                    // user pauses. Avoid the normal UI/title/log/GC pause path.
+                    Device.System.TogglePauseEmulation(true);
+                    NpadManager.NotifySmashSyncPaused();
+                }
+                else if (NpadManager.SmashSyncCanAdoptExistingPause)
+                {
+                    // The pre-launch pause was armed by SmashSync before guest
+                    // construction. It is safe for the session to adopt that pause.
+                    NpadManager.NotifySmashSyncPaused();
+                }
+                // Never adopt an unrelated user pause while a runtime network stall
+                // is pending. Otherwise SmashSync could later resume the user's pause.
+            }
+
+            if (NpadManager.SmashSyncResumeRequested && NpadManager.SmashSyncOwnsPause && Device.System.IsPaused)
+            {
+                // Startup release is armed ahead of the shared P1-authoritative
+                // monotonic epoch. Wait here with sub-frame precision instead of
+                // quantizing resume to whichever host render-loop iteration happens
+                // to notice the release first.
+                NpadManager.WaitForSmashSyncResumeEpoch();
+                NpadManager.NotifySmashSyncResumeDispatch();
+                Device.System.TogglePauseEmulation(false);
+                NpadManager.NotifySmashSyncResumed();
+            }
+
+            // A SmashSync-owned pause is a synchronization barrier. Keep the UI/network
+            // loop alive, but do not advance the host HID tick until the peer is ready.
+            if (Device.System.IsPaused && NpadManager.SmashSyncOwnsPause)
+            {
+                return true;
+            }
+
             if (!_viewModel.IsActive)
             {
                 _inputManager.KeyboardDriver.Clear();
             }
 
-            NpadManager.Update(ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat());
+            NpadManager.Update(ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat(), !Device.System.IsPaused);
+
+            // A remote tick can become missing while ProcessInputs is executing.
+            // Enter the lockstep barrier immediately in this same host iteration,
+            // rather than allowing another full UpdateFrame worth of guest execution.
+            if (NpadManager.SmashSyncPauseRequested && !NpadManager.SmashSyncOwnsPause)
+            {
+                if (!Device.System.IsPaused)
+                {
+                    Device.System.TogglePauseEmulation(true);
+                    NpadManager.NotifySmashSyncPaused();
+                    return true;
+                }
+
+                if (NpadManager.SmashSyncCanAdoptExistingPause)
+                {
+                    NpadManager.NotifySmashSyncPaused();
+                    return true;
+                }
+            }
 
             if (_viewModel.IsActive)
             {
@@ -1439,20 +1556,28 @@ namespace Ryujinx.Ava.Systems
                 }
             }
 
-            // Touchscreen.
-            bool hasTouch = false;
-
-            if (_viewModel.IsActive && !ConfigurationState.Instance.Hid.EnableMouse.Value)
+            // Host pointer/touch/debug-pad input is intentionally not exposed
+            // during SmashSync. Those streams are not networked and touch/mouse
+            // coordinates depend on each local window/aspect ratio.
+            if (!NpadManager.SmashSyncCanonicalRouting)
             {
-                hasTouch = TouchScreenManager.Update(true, (_inputManager.MouseDriver as AvaloniaMouseDriver).IsButtonPressed(MouseButton.Button1), ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat());
-            }
+                bool hasTouch = false;
 
-            if (!hasTouch)
-            {
-                Device.Hid.Touchscreen.Update();
-            }
+                if (_viewModel.IsActive && !ConfigurationState.Instance.Hid.EnableMouse.Value)
+                {
+                    hasTouch = TouchScreenManager.Update(
+                        true,
+                        (_inputManager.MouseDriver as AvaloniaMouseDriver).IsButtonPressed(MouseButton.Button1),
+                        ConfigurationState.Instance.Graphics.AspectRatio.Value.ToFloat());
+                }
 
-            Device.Hid.DebugPad.Update();
+                if (!hasTouch)
+                {
+                    Device.Hid.Touchscreen.Update();
+                }
+
+                Device.Hid.DebugPad.Update();
+            }
 
             return true;
         }

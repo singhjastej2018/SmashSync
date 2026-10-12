@@ -1,0 +1,77 @@
+name: Build SmashSync Windows x64
+
+on:
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+concurrency:
+  group: smashsync-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  build-windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Build required Ryujinx.LibHac package
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/sinjunyoung/NSW.M2.git vendor/NSW.M2
+          New-Item -ItemType Directory -Force vendor-packages | Out-Null
+          $sdk8 = dotnet --list-sdks |
+            ForEach-Object { if ($_ -match '^(8\.0\.\d+)') { $Matches[1] } } |
+            Select-Object -Last 1
+          if (-not $sdk8) { throw "A .NET 8 SDK was not found." }
+          @{ sdk = @{ version = $sdk8; rollForward = "latestPatch" } } |
+            ConvertTo-Json -Depth 3 |
+            Set-Content vendor/NSW.M2/global.json
+          Push-Location vendor/NSW.M2
+          dotnet pack NSW.Utils/NSW.Utils.csproj -c Release -o ../../vendor-packages -p:PackageVersion=0.21.0-alpha.133
+          if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+          dotnet pack LibHac/LibHac.csproj -c Release -o ../../vendor-packages -p:PackageVersion=0.21.0-alpha.133
+          $packExit = $LASTEXITCODE
+          Pop-Location
+          if ($packExit -ne 0) { exit $packExit }
+
+      - name: Restore Windows x64
+        run: dotnet restore src/Ryujinx/Ryujinx.csproj -r win-x64
+
+      - name: Publish Windows x64
+        run: dotnet publish src/Ryujinx/Ryujinx.csproj -c Release -r win-x64 --self-contained true --no-restore -o publish -p:ExtraDefineConstants=DISABLE_UPDATER
+
+      - name: Rename published executable
+        shell: pwsh
+        run: |
+          if (Test-Path publish/Ryujinx.exe) {
+            Move-Item publish/Ryujinx.exe publish/SmashSync.exe -Force
+          } elseif (-not (Test-Path publish/SmashSync.exe)) {
+            throw "Published executable was not found."
+          }
+
+      - name: Create default portable folder
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force publish/portable | Out-Null
+
+      - name: Copy SmashSync docs
+        shell: pwsh
+        run: |
+          Copy-Item docs/SmashSync.md publish/SMASHSYNC.md
+          Copy-Item smashsync.example.json publish/smashsync.example.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SmashSync-win-x64
+          path: publish
