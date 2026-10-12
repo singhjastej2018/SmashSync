@@ -213,10 +213,19 @@ namespace Ryujinx.Input.HLE.SmashSync
                 config.MaxClockRateAdjustmentPercent <= 0 ||
                 !States.TryGetValue(owner, out State state) ||
                 state.Device == null ||
-                state.Device.TurboMode ||
                 localEpochNs <= 0)
             {
                 Restore(owner);
+                return;
+            }
+
+            // Respect Ryujinx turbo/custom-speed mode. SmashSync must not overwrite
+            // a user-selected turbo scalar with the netplay baseline.
+            if (state.Device.TurboMode)
+            {
+                state.LastUpdateMs = 0;
+                state.LastUpdateNs = 0;
+                state.ErrorEwma = 0;
                 return;
             }
 
