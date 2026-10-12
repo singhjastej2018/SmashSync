@@ -94,7 +94,11 @@ namespace Ryujinx.Input.HLE
                 new ControllerConfig { Player = PlayerIndex.Player2, Type = Ryujinx.HLE.HOS.Services.Hid.ControllerType.ProController });
         }
 
-        public void PumpSmashSyncControl() => _smashSync?.PumpControl();
+        public void PumpSmashSyncControl()
+        {
+            _smashSync?.PumpControl();
+            SmashSyncAdaptiveClockServo.UpdateFromSession(_smashSync);
+        }
 
         public void RefreshSmashSyncStateFingerprint() => _smashSync?.AttachDevice(_device);
 
@@ -116,6 +120,7 @@ namespace Ryujinx.Input.HLE
                 _device.Hid.Mouse.ResetSmashSyncInputHistory();
                 _device.Hid.Touchscreen.ResetSmashSyncInputHistory();
                 _device.Hid.DebugPad.ResetSmashSyncInputHistory();
+                SmashSyncAdaptiveClockServo.ResetPhase(_smashSync);
             }
 
             _smashSync?.NotifyPaused();
@@ -449,6 +454,7 @@ namespace Ryujinx.Input.HLE
             _device = device;
             _device.Configuration.RefreshInputConfig = RefreshInputConfigForHLE;
             _smashSync?.AttachDevice(device);
+            SmashSyncAdaptiveClockServo.Attach(_smashSync, device);
 
             ReloadConfiguration(inputConfig, playerInputAssignments, enableKeyboard, enableMouse);
         }
@@ -625,6 +631,7 @@ namespace Ryujinx.Input.HLE
                 {
                     if (!_isDisposed)
                     {
+                        SmashSyncAdaptiveClockServo.Restore(_smashSync);
                         _smashSync?.Dispose();
                         _cemuHookClient.Dispose();
 
