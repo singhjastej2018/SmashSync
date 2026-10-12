@@ -1,5 +1,9 @@
+using Ryujinx.Common.Logging;
 using Ryujinx.HLE;
+using Ryujinx.HLE.HOS.Services.Hid;
 using System;
+using System.Collections.Generic;
+using System.Reflection;
 using System.Runtime.CompilerServices;
 
 namespace Ryujinx.Input.HLE.SmashSync
@@ -18,6 +22,15 @@ namespace Ryujinx.Input.HLE.SmashSync
         private const double ErrorDeadbandTicks = 0.35;
         private const double GainPercentPerTick = 1.25;
         private const double MinimumSpeedupHeadroom = 0.97;
+
+        private static readonly BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+        private static readonly FieldInfo ConfigField = typeof(SmashSyncSession).GetField("_config", PrivateInstance);
+        private static readonly FieldInfo EffectiveDelayField = typeof(SmashSyncSession).GetField("_effectiveInputDelayTicks", PrivateInstance);
+        private static readonly FieldInfo LastRttField = typeof(SmashSyncSession).GetField("_lastRttMs", PrivateInstance);
+        private static readonly FieldInfo RunningStartedField = typeof(SmashSyncSession).GetField("_runningStartedNs", PrivateInstance);
+        private static readonly FieldInfo LocalEpochField = typeof(SmashSyncSession).GetField("_localEpochNs", PrivateInstance);
+        private static readonly FieldInfo RemoteHistoryField = typeof(SmashSyncSession).GetField("_remoteHistory", PrivateInstance);
+        private static readonly FieldInfo RemoteLockField = typeof(SmashSyncSession).GetField("_remoteLock", PrivateInstance);
 
         private sealed class State
         {
@@ -49,6 +62,124 @@ namespace Ryujinx.Input.HLE.SmashSync
                 state.LastUpdateNs = 0;
                 state.ErrorEwma = 0;
                 state.RatePercent = 100;
+            }
+        }
+
+        /// <summary>
+        /// Called immediately after the normal SmashSync control pump. The session
+        /// intentionally remains the owner of strict lockstep; the servo observes
+        /// its received-input buffer and nudges only local pacing.
+        /// </summary>
+        public static void UpdateFromSession(SmashSyncSession session)
+        {
+            if (session == null)
+            {
+                return;
+            }
+
+            if (!session.CanonicalRouting)
+            {
+                Restore(session);
+                return;
+            }
+
+            // While a hard barrier is active the guest clock is suspended anyway.
+            // Preserve the last correction so the peer does not immediately race
+            // back into another stall after resume.
+            if (session.OwnsPause || session.PauseRequested)
+            {
+                return;
+            }
+
+            if (ConfigField?.GetValue(session) is not SmashSyncConfig config ||
+                EffectiveDelayField == null ||
+                LastRttField == null ||
+                RunningStartedField == null ||
+                LocalEpochField == null ||
+                RemoteHistoryField == null ||
+                RemoteLockField == null)
+            {
+                Restore(session);
+                return;
+            }
+
+            if (!config.EnableAdaptiveClockSync || config.MaxClockRateAdjustmentPercent <= 0)
+            {
+                Restore(session);
+                return;
+            }
+
+            long localEpochNs = (long)LocalEpochField.GetValue(session);
+            if (localEpochNs <= 0)
+            {
+                return;
+            }
+
+            Dictionary<ulong, GamepadInput> remoteHistory = RemoteHistoryField.GetValue(session) as Dictionary<ulong, GamepadInput>;
+            object remoteLock = RemoteLockField.GetValue(session);
+            if (remoteHistory == null || remoteLock == null)
+            {
+                return;
+            }
+
+            ulong localTick = session.SharedTick;
+            ulong highestRemoteTick = 0;
+            bool haveRemote = false;
+
+            lock (remoteLock)
+            {
+                foreach (ulong tick in remoteHistory.Keys)
+                {
+                    if (!haveRemote || tick > highestRemoteTick)
+                    {
+                        highestRemoteTick = tick;
+                        haveRemote = true;
+                    }
+                }
+            }
+
+            if (!haveRemote)
+            {
+                return;
+            }
+
+            long signedLead = highestRemoteTick >= localTick
+                ? (long)Math.Min(highestRemoteTick - localTick, 64UL)
+                : -(long)Math.Min(localTick - highestRemoteTick, 64UL);
+
+            int effectiveDelay = (int)EffectiveDelayField.GetValue(session);
+            double lastRttMs = (double)LastRttField.GetValue(session);
+            double tickMs = 1000.0 / Math.Max(1, config.SyncHz);
+            int transportTicks = lastRttMs > 0
+                ? (int)Math.Floor((lastRttMs * 0.5) / tickMs)
+                : 0;
+            int targetLead = Math.Max(0, effectiveDelay - transportTicks);
+
+            long nowNs = MonotonicNowNs();
+            long runningStartedNs = (long)RunningStartedField.GetValue(session);
+            double effectiveHz = 0;
+            if (runningStartedNs > 0 && nowNs > runningStartedNs && localTick > 0)
+            {
+                effectiveHz = localTick * 1_000_000_000.0 / (nowNs - runningStartedNs);
+            }
+
+            long nowMs = Environment.TickCount64;
+            long originalEpochNs = localEpochNs;
+
+            Update(
+                session,
+                config,
+                nowMs,
+                nowNs,
+                localTick,
+                (int)signedLead,
+                targetLead,
+                effectiveHz,
+                ref localEpochNs);
+
+            if (localEpochNs != originalEpochNs)
+            {
+                LocalEpochField.SetValue(session, localEpochNs);
             }
         }
 
@@ -165,6 +296,14 @@ namespace Ryujinx.Input.HLE.SmashSync
             state.ErrorEwma = 0;
         }
 
+        private static long MonotonicNowNs()
+        {
+            long ticks = System.Diagnostics.Stopwatch.GetTimestamp();
+            long seconds = ticks / System.Diagnostics.Stopwatch.Frequency;
+            long remainder = ticks % System.Diagnostics.Stopwatch.Frequency;
+            return seconds * 1_000_000_000L + remainder * 1_000_000_000L / System.Diagnostics.Stopwatch.Frequency;
+        }
+
         private static void ApplyRate(State state, int ratePercent)
         {
             if (state.Device == null)
@@ -186,6 +325,14 @@ namespace Ryujinx.Input.HLE.SmashSync
             {
                 state.Device.TickScalar = desiredScalar;
                 state.AppliedTickScalar = desiredScalar;
+
+                if (state.RatePercent != ratePercent)
+                {
+                    Logger.Info?.PrintMsg(
+                        LogClass.Application,
+                        $"SmashSync: adaptive clock rate {state.RatePercent}% -> {ratePercent}% guestScalar={desiredScalar}");
+                }
+
                 state.RatePercent = ratePercent;
             }
             catch
