@@ -52,7 +52,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 return;
             }
 
-            State state = States.GetOrCreateValue(owner);
+            State state = States.GetValue(owner, static _ => new State());
             if (!ReferenceEquals(state.Device, device))
             {
                 state.Device = device;
