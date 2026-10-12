@@ -33,6 +33,12 @@ namespace Ryujinx.Input.HLE.SmashSync
         public bool ConfigureTwoPlayers { get; set; } = true;
         public bool RequireReadyChord { get; set; } = true;
 
+        // Experimental phase-locked pacing. This does not replace the strict
+        // per-tick input barrier; it continuously trims small host pacing errors
+        // so that the barrier is reached less often.
+        public bool EnableAdaptiveClockSync { get; set; } = true;
+        public int MaxClockRateAdjustmentPercent { get; set; } = 3;
+
         public SmashSyncMode ParsedMode =>
             Enum.TryParse(Mode, true, out SmashSyncMode mode) ? mode : SmashSyncMode.Off;
 
@@ -65,6 +71,7 @@ namespace Ryujinx.Input.HLE.SmashSync
                 config.LockstepTimeoutMs = Math.Clamp(config.LockstepTimeoutMs, 250, 60000);
                 config.HandshakeTimeoutMs = Math.Clamp(config.HandshakeTimeoutMs, 1000, 120000);
                 config.Redundancy = Math.Clamp(config.Redundancy, 1, 3);
+                config.MaxClockRateAdjustmentPercent = Math.Clamp(config.MaxClockRateAdjustmentPercent, 0, 10);
 
                 return config;
             }
