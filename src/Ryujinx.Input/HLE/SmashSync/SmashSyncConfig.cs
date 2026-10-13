@@ -33,9 +33,10 @@ namespace Ryujinx.Input.HLE.SmashSync
         public bool ConfigureTwoPlayers { get; set; } = true;
         public bool RequireReadyChord { get; set; } = true;
 
-        // Reserved for a future pacing controller tied to a verified guest/game
-        // simulation boundary. Peer-local clock correction is disabled because it
-        // can map the same logical input tick onto different SSBU updates.
+        // Legacy experimental peer-rate correction. Keep the setting for config-file
+        // compatibility, but it is intentionally disabled. Netplay now compensates
+        // paused wall time by anchoring HID pacing to Ryujinx guest elapsed time;
+        // that deterministic bridge does not alter TickScalar.
         public bool EnableAdaptiveClockSync { get; set; } = false;
         public int MaxClockRateAdjustmentPercent { get; set; } = 3;
 
