@@ -33,10 +33,11 @@ namespace Ryujinx.Input.HLE.SmashSync
         public bool ConfigureTwoPlayers { get; set; } = true;
         public bool RequireReadyChord { get; set; } = true;
 
-        // Experimental phase-locked pacing. This does not replace the strict
-        // per-tick input barrier; it continuously trims small host pacing errors
-        // so that the barrier is reached less often.
-        public bool EnableAdaptiveClockSync { get; set; } = true;
+        // Legacy experimental peer-rate correction. Keep the setting for config-file
+        // compatibility, but it is intentionally disabled. Netplay now compensates
+        // paused wall time by anchoring HID pacing to Ryujinx guest elapsed time;
+        // that deterministic bridge does not alter TickScalar.
+        public bool EnableAdaptiveClockSync { get; set; } = false;
         public int MaxClockRateAdjustmentPercent { get; set; } = 3;
 
         public SmashSyncMode ParsedMode =>

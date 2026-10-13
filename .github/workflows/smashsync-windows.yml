@@ -3,6 +3,8 @@ name: Build SmashSync Windows x64
 on:
   pull_request:
     branches: [ master ]
+  push:
+    branches: [ fix/deterministic-guest-clock ]
   workflow_dispatch:
 
 concurrency:
